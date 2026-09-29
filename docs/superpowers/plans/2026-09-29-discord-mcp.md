@@ -532,6 +532,7 @@ export interface ToolDef<S extends z.ZodObject<z.ZodRawShape> = z.ZodObject<z.Zo
   group: string
   description: string
   tier: Tier
+  unscoped?: boolean
   input: S
   guildFrom: (input: z.infer<S>) => string | null
   preview?: (ctx: ToolContext, input: z.infer<S>) => Promise<PreviewResult>

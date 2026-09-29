@@ -1,8 +1,8 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
-import { ConfigSchema, McpToolError } from '../../src/contracts/index.js'
-import type { Config, Logger, Principal, RulesPort, Services } from '../../src/contracts/index.js'
+import { ConfigSchema } from '../../src/contracts/index.js'
+import type { Config, Logger, Principal, Services } from '../../src/contracts/index.js'
 import { createEventsService } from '../../src/events/index.js'
 import type { EventsService } from '../../src/events/index.js'
 import {
@@ -13,6 +13,8 @@ import {
   createConfirmService,
   runTool,
 } from '../../src/safety/index.js'
+import { createRulesService } from '../../src/rules/index.js'
+import type { RulesService } from '../../src/rules/index.js'
 import { buildToolRegistry } from '../../src/server/registry.js'
 import { createMcpServer } from '../../src/server/mcp.js'
 import { openStore } from '../../src/store/index.js'
@@ -44,6 +46,7 @@ export interface Harness {
   store: Store
   services: Services
   events: EventsService
+  rules: RulesService
   config: Config
   clock: Clock
   logs: LogLine[]
@@ -51,26 +54,7 @@ export interface Harness {
   asPrincipal(p: Principal): Promise<Client>
 }
 
-const notWired = (): never => {
-  throw new McpToolError('internal', 'rules service not wired in harness')
-}
-
-const stubRules: RulesPort = {
-  create: async () => notWired(),
-  list: async () => notWired(),
-  update: async () => notWired(),
-  remove: async () => notWired(),
-  test: async () => notWired(),
-}
-
-export interface RulesDeps {
-  store: Store
-  policy: PolicyEngine
-  logger: Logger
-  clock: Clock
-}
-
-export const buildHarness = async (o: { config?: Partial<Config>; rules?: (deps: RulesDeps) => RulesPort } = {}): Promise<Harness> => {
+export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promise<Harness> => {
   const config = ConfigSchema.parse({ guilds: { [DEFAULT_GUILD]: { max_tier: 'destructive' } }, ...o.config })
   let time = Date.parse('2026-09-29T12:00:00.000Z')
   const clock: Clock = {
@@ -103,14 +87,22 @@ export const buildHarness = async (o: { config?: Partial<Config>; rules?: (deps:
     now: clock.now,
   })
   events.start()
-  const services: Services = {
-    events,
-    rules: o.rules ? o.rules({ store, policy, logger, clock }) : stubRules,
-    audit: createAuditPort({ store, policy }),
-    policy,
-  }
   const registry = buildToolRegistry(allTools, config.tools.deny)
   const pipeline = { policy, confirm, audit, limiter, now: clock.now }
+  let services: Services
+  const rules = createRulesService({
+    store,
+    policy,
+    pipeline,
+    subscribe: (cb) => events.subscribe(cb),
+    toolByName: (name) => registry.get(name),
+    discord,
+    services: () => services,
+    logger,
+    now: clock.now,
+  })
+  services = { events, rules, audit: createAuditPort({ store, policy }), policy }
+  rules.start()
 
   const open: { client: Client; server: McpServer }[] = []
   const connect = async (principal: Principal): Promise<{ client: Client; server: McpServer }> => {
@@ -142,6 +134,7 @@ export const buildHarness = async (o: { config?: Partial<Config>; rules?: (deps:
     store,
     services,
     events,
+    rules,
     config,
     clock,
     logs,
@@ -151,6 +144,7 @@ export const buildHarness = async (o: { config?: Partial<Config>; rules?: (deps:
         await client.close()
         await server.close()
       }
+      rules.stop()
       events.stop()
       store.close()
     },

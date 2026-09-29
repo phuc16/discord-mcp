@@ -219,4 +219,39 @@ describe('rules through the MCP surface', () => {
     const r = await call(readOnly, 'rules_create', assignRule(role.id))
     expect(r.code).toBe('tier_exceeded')
   })
+
+  it('caps rule actions per guild per minute', async () => {
+    const { harness, role } = await setup()
+    await call(harness.client, 'rules_create', assignRule(role.id))
+    for (let i = 0; i < 40; i++) await emit(harness, 'member_join', { user_id: USER })
+    const fired = methods(harness, 'addMemberRole').length
+    expect(fired).toBeGreaterThan(0)
+    expect(fired).toBeLessThanOrEqual(30)
+    harness.clock.advance(61_000)
+    const before = methods(harness, 'addMemberRole').length
+    await emit(harness, 'member_join', { user_id: USER })
+    expect(methods(harness, 'addMemberRole').length).toBe(before + 1)
+  })
+
+  it('a catastrophic regex condition neither hangs nor fires', async () => {
+    const { harness, role } = await setup()
+    await call(harness.client, 'rules_create', {
+      ...assignRule(role.id),
+      conditions: [{ op: 'matches', field: 'name', pattern: '(a+)+$' }],
+    })
+    const started = performance.now()
+    await emit(harness, 'member_join', { user_id: USER, name: `${'a'.repeat(40)}!` })
+    expect(performance.now() - started).toBeLessThan(1000)
+    expect(methods(harness, 'addMemberRole')).toHaveLength(0)
+  })
+
+  it('an unknown action tool is rejected at creation', async () => {
+    const { harness } = await setup()
+    const r = await call(harness.client, 'rules_create', {
+      guild_id: GUILD_A,
+      trigger: { event: 'member_join', filter: {} },
+      actions: [{ tool: 'does_not_exist', input_template: {} }],
+    })
+    expect(r.code).toBe('invalid_input')
+  })
 })

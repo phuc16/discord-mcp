@@ -58,6 +58,7 @@ export const buildRuntime = (input: RuntimeInput, opts: { http: boolean }): Runt
     confirm: createConfirmService({ store }),
     audit: createAuditWriter({ store, logger }),
     limiter: createBulkLimiter({ perMinute: config.rate_limits.bulk_per_minute }),
+    allowTokenConfirm: config.safety.allow_token_confirm,
   }
 
   const servicesRef: { current?: Services } = {}
@@ -70,6 +71,7 @@ export const buildRuntime = (input: RuntimeInput, opts: { http: boolean }): Runt
     discord,
     services: () => servicesRef.current as Services,
     logger,
+    limits: { maxPerGuild: config.rules.max_per_guild, minCooldownSec: config.rules.min_cooldown_sec },
   })
   const services: Services = { events, rules, audit: createAuditPort({ store, policy }), policy }
   servicesRef.current = services
@@ -93,7 +95,7 @@ export const buildRuntime = (input: RuntimeInput, opts: { http: boolean }): Runt
       store,
       discord,
       subscribe: (cb) => events.subscribe(cb),
-      onDemoted: (userId, reason) => rules.disableForOwner(userId, reason),
+      onDemoted: (userId, guildId, reason) => rules.disableForOwner(userId, guildId, reason),
     })
     const provider = createAuthProvider({
       store,

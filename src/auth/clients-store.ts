@@ -1,10 +1,30 @@
 import { randomUUID } from 'node:crypto'
-import { InvalidClientMetadataError } from '@modelcontextprotocol/sdk/server/auth/errors.js'
+import { InvalidClientMetadataError, TooManyRequestsError } from '@modelcontextprotocol/sdk/server/auth/errors.js'
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js'
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js'
 import type { Store } from '../store/index.js'
 
-export const createClientsStore = (store: Store): OAuthRegisteredClientsStore => ({
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]'])
+
+export const redirectUriAllowed = (uri: string, allowed: readonly string[]): boolean => {
+  if (allowed.length > 0) return allowed.includes(uri)
+  let url: URL
+  try {
+    url = new URL(uri)
+  } catch {
+    return false
+  }
+  if (url.username !== '' || url.password !== '' || url.hash !== '') return false
+  if (url.protocol === 'https:') return true
+  return url.protocol === 'http:' && LOOPBACK_HOSTS.has(url.hostname)
+}
+
+export interface ClientsStoreOptions {
+  allowedRedirectUris?: readonly string[]
+  maxClients?: number
+}
+
+export const createClientsStore = (store: Store, opts: ClientsStoreOptions = {}): OAuthRegisteredClientsStore => ({
   getClient(clientId) {
     const c = store.oauth.getClient(clientId)
     if (!c) return undefined
@@ -20,6 +40,14 @@ export const createClientsStore = (store: Store): OAuthRegisteredClientsStore =>
   },
   async registerClient(client) {
     if (client.redirect_uris.length === 0) throw new InvalidClientMetadataError('redirect_uris required')
+    for (const uri of client.redirect_uris) {
+      if (!redirectUriAllowed(String(uri), opts.allowedRedirectUris ?? [])) {
+        throw new InvalidClientMetadataError('redirect_uri must be https or loopback http, or be listed in http.allowed_redirect_uris')
+      }
+    }
+    if (opts.maxClients !== undefined && store.oauth.countClients() >= opts.maxClients) {
+      throw new TooManyRequestsError('client registration limit reached')
+    }
     const clientId = randomUUID()
     const createdAt = new Date().toISOString()
     store.oauth.saveClient({

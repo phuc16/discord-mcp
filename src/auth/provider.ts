@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, timingSafeEqual } from 'node:crypto'
 import type { Response } from 'express'
 import type { AuthorizationParams, OAuthServerProvider } from '@modelcontextprotocol/sdk/server/auth/provider.js'
 import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/server/auth/clients.js'
@@ -8,7 +8,8 @@ import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthToke
 import { McpToolError } from '../contracts/index.js'
 import type { DiscordOAuthPort, DiscordPort } from '../contracts/index.js'
 import type { Session, Store } from '../store/index.js'
-import { createClientsStore } from './clients-store.js'
+import { createClientsStore, redirectUriAllowed } from './clients-store.js'
+import { renderConsentPage } from './consent.js'
 import { hashSecret, newToken } from './tokens.js'
 
 const ADMINISTRATOR = 1n << 3n
@@ -17,9 +18,33 @@ const STATE_TTL_MS = 10 * 60_000
 const CODE_TTL_MS = 5 * 60_000
 const ACCESS_TTL_MS = 60 * 60_000
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60_000
+const ORIGINS_TTL_MS = 60_000
+export const CONSENT_COOKIE = 'mcp_consent'
+export const STATE_COOKIE = 'mcp_oauth_state'
+
+export const parseCookies = (header: string | undefined): Record<string, string> => {
+  const out: Record<string, string> = {}
+  for (const part of (header ?? '').split(';')) {
+    const i = part.indexOf('=')
+    if (i > 0) out[part.slice(0, i).trim()] = part.slice(i + 1).trim()
+  }
+  return out
+}
+
+const safeEqual = (a: string | undefined, b: string | undefined): boolean => {
+  if (a === undefined || b === undefined || a.length === 0) return false
+  const ab = Buffer.from(a)
+  const bb = Buffer.from(b)
+  return ab.length === bb.length && timingSafeEqual(ab, bb)
+}
+
+const bodyField = (req: Response['req'] | undefined, name: string): string | undefined => {
+  const v = (req?.body as Record<string, unknown> | undefined)?.[name]
+  return typeof v === 'string' ? v : undefined
+}
 
 export interface AuthProvider extends OAuthServerProvider {
-  handleDiscordCallback(req: { code: string; state: string }): Promise<{ redirectTo: string }>
+  handleDiscordCallback(req: { code: string; state: string; browserState: string | undefined }): Promise<{ redirectTo: string }>
   registeredOrigins(): ReadonlySet<string>
 }
 
@@ -28,7 +53,7 @@ export interface AuthProviderDeps {
   discordOAuth: DiscordOAuthPort
   discord: Pick<DiscordPort, 'listBotGuildIds'>
   policy: { guildAllowed(guildId: string): boolean }
-  config: { publicBaseUrl: string; discordClientId: string }
+  config: { publicBaseUrl: string; discordClientId: string; allowedRedirectUris?: string[]; maxClients?: number }
   now?: () => number
   beforeIssue?: (session: Session) => Promise<Session>
 }
@@ -50,7 +75,17 @@ const clientRedirect = (redirectUri: string, params: Record<string, string | nul
 
 export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
   const now = d.now ?? Date.now
-  const clientsStore = createClientsStore(d.store)
+  const cookieFlags = d.config.publicBaseUrl.startsWith('https:') ? '; Secure' : ''
+  let originsCache: { at: number; origins: Set<string> } | null = null
+  const baseClients = createClientsStore(d.store, { allowedRedirectUris: d.config.allowedRedirectUris, maxClients: d.config.maxClients })
+  const clientsStore: OAuthRegisteredClientsStore = {
+    getClient: (id) => baseClients.getClient(id),
+    registerClient: async (c) => {
+      const registered = await baseClients.registerClient!(c)
+      originsCache = null
+      return registered
+    },
+  }
   const callbackUrl = `${d.config.publicBaseUrl.replace(/\/$/, '')}/callback`
 
   const issueTokens = (s: Omit<Session, 'accessHash' | 'refreshHash' | 'accessExpiresAt' | 'refreshExpiresAt' | 'revoked'>): OAuthTokens => {
@@ -76,7 +111,48 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
       if (!client.redirect_uris.some((u) => String(u) === params.redirectUri)) {
         throw new InvalidRequestError('redirect_uri is not registered for this client')
       }
+      if (!redirectUriAllowed(params.redirectUri, d.config.allowedRedirectUris ?? [])) {
+        throw new InvalidRequestError('redirect_uri is not allowed by server policy')
+      }
       if (!params.codeChallenge) throw new InvalidRequestError('PKCE code_challenge is required')
+      const req = res.req as Response['req'] | undefined
+      const decision = req?.method === 'POST' ? bodyField(req, 'consent') : undefined
+      res.setHeader('Cache-Control', 'no-store')
+      res.setHeader('X-Frame-Options', 'DENY')
+      res.setHeader('Referrer-Policy', 'no-referrer')
+
+      if (decision === undefined) {
+        const csrf = newToken()
+        res.setHeader('Set-Cookie', `${CONSENT_COOKIE}=${csrf}; HttpOnly; SameSite=Lax; Path=/authorize; Max-Age=600${cookieFlags}`)
+        res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://discord.com; frame-ancestors 'none'; base-uri 'none'")
+        res.status(200).type('html').send(
+          renderConsentPage({
+            clientName: client.client_name ?? '',
+            redirectUri: params.redirectUri,
+            csrf,
+            fields: {
+              client_id: client.client_id,
+              redirect_uri: params.redirectUri,
+              response_type: 'code',
+              code_challenge: params.codeChallenge,
+              code_challenge_method: 'S256',
+              ...(params.state !== undefined && { state: params.state }),
+              ...(params.scopes && params.scopes.length > 0 && { scope: params.scopes.join(' ') }),
+              ...(params.resource && { resource: params.resource.href }),
+            },
+          }),
+        )
+        return
+      }
+
+      const csrfCookie = parseCookies(req?.headers.cookie)[CONSENT_COOKIE]
+      if (!safeEqual(csrfCookie, bodyField(req, 'csrf'))) throw new InvalidRequestError('invalid or missing consent token')
+      res.setHeader('Set-Cookie', `${CONSENT_COOKIE}=; HttpOnly; SameSite=Lax; Path=/authorize; Max-Age=0${cookieFlags}`)
+      if (decision !== 'approve') {
+        res.redirect(clientRedirect(params.redirectUri, { error: 'access_denied', state: params.state ?? null }))
+        return
+      }
+
       const state = newToken()
       d.store.oauth.savePending({
         state,
@@ -87,16 +163,19 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
         scopes: params.scopes ?? [],
         expiresAt: now() + STATE_TTL_MS,
       })
+      res.appendHeader('Set-Cookie', `${STATE_COOKIE}=${state}; HttpOnly; SameSite=Lax; Path=/callback; Max-Age=${STATE_TTL_MS / 1000}${cookieFlags}`)
       const url = new URL('https://discord.com/oauth2/authorize')
       url.searchParams.set('response_type', 'code')
       url.searchParams.set('client_id', d.config.discordClientId)
       url.searchParams.set('scope', 'identify guilds')
       url.searchParams.set('redirect_uri', callbackUrl)
       url.searchParams.set('state', state)
+      url.searchParams.set('prompt', 'consent')
       res.redirect(url.toString())
     },
 
     registeredOrigins() {
+      if (originsCache && now() - originsCache.at < ORIGINS_TTL_MS) return originsCache.origins
       const origins = new Set<string>()
       for (const c of d.store.oauth.listClients()) {
         for (const uri of c.redirectUris) {
@@ -107,10 +186,12 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
           }
         }
       }
+      originsCache = { at: now(), origins }
       return origins
     },
 
     async handleDiscordCallback(req) {
+      if (!safeEqual(req.browserState, req.state)) throw new InvalidRequestError('state does not match this browser session')
       const pending = d.store.oauth.consumePending(req.state, now())
       if (!pending) throw new InvalidRequestError('unknown or expired state')
       const back = (params: Record<string, string>): { redirectTo: string } => ({
@@ -147,30 +228,37 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
     },
 
     async challengeForAuthorizationCode(client, authorizationCode) {
-      const c = d.store.oauth.peekCode(hashSecret(authorizationCode), now())
-      if (!c || c.clientId !== client.client_id) throw new InvalidGrantError('invalid authorization code')
+      const hash = hashSecret(authorizationCode)
+      const c = d.store.oauth.peekCode(hash, now())
+      if (!c) {
+        const family = d.store.oauth.familyForUsedCode(hash)
+        if (family !== null) d.store.oauth.revokeFamily(family)
+        throw new InvalidGrantError('invalid authorization code')
+      }
+      if (c.clientId !== client.client_id) throw new InvalidGrantError('invalid authorization code')
       return c.codeChallenge
     },
 
     async exchangeAuthorizationCode(client, authorizationCode, _codeVerifier, redirectUri) {
-      const c = d.store.oauth.consumeCode(hashSecret(authorizationCode), now())
-      if (!c || c.clientId !== client.client_id) throw new InvalidGrantError('invalid authorization code')
-      if (redirectUri !== undefined && redirectUri !== c.redirectUri) throw new InvalidGrantError('redirect_uri mismatch')
-      return issueTokens({ familyId: randomUUID(), clientId: c.clientId, userId: c.userId, userName: c.userName, guilds: c.guilds })
+      const hash = hashSecret(authorizationCode)
+      const c = d.store.oauth.consumeCode(hash, now())
+      if (!c) {
+        const family = d.store.oauth.familyForUsedCode(hash)
+        if (family !== null) d.store.oauth.revokeFamily(family)
+        throw new InvalidGrantError('invalid authorization code')
+      }
+      if (c.clientId !== client.client_id) throw new InvalidGrantError('invalid authorization code')
+      if (redirectUri === undefined || redirectUri !== c.redirectUri) throw new InvalidGrantError('redirect_uri mismatch')
+      const familyId = randomUUID()
+      const tokens = issueTokens({ familyId, clientId: c.clientId, userId: c.userId, userName: c.userName, guilds: c.guilds })
+      d.store.oauth.recordCodeFamily(hash, familyId)
+      return tokens
     },
 
     async exchangeRefreshToken(client, refreshToken) {
       const oldRefreshHash = hashSecret(refreshToken)
       const current = d.store.oauth.getByRefreshHash(oldRefreshHash)
       if (current && current.clientId !== client.client_id) throw new InvalidGrantError('invalid refresh token')
-      let guilds = current?.guilds ?? {}
-      if (current && !current.revoked && current.refreshExpiresAt > now() && d.beforeIssue) {
-        guilds = (await d.beforeIssue(current)).guilds
-        if (Object.keys(guilds).length === 0) {
-          d.store.oauth.revokeFamily(current.familyId)
-          throw new InvalidGrantError('invalid refresh token')
-        }
-      }
       const access = newToken()
       const refresh = newToken()
       const rotated = d.store.oauth.rotateRefresh({
@@ -179,11 +267,19 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
         newAccessHash: hashSecret(access),
         accessExpiresAt: now() + ACCESS_TTL_MS,
         refreshExpiresAt: now() + REFRESH_TTL_MS,
-        guilds,
+        guilds: current?.guilds ?? {},
         now: now(),
       })
       if (!rotated) throw new InvalidGrantError('invalid refresh token')
       if ('reuse' in rotated) throw new InvalidGrantError('refresh token reuse detected')
+      if (d.beforeIssue) {
+        const refreshed = await d.beforeIssue(rotated.session)
+        if (Object.keys(refreshed.guilds).length === 0) {
+          d.store.oauth.revokeFamily(rotated.session.familyId)
+          throw new InvalidGrantError('invalid refresh token')
+        }
+        d.store.oauth.updateSessionGuilds(rotated.session.familyId, refreshed.guilds)
+      }
       return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL_MS / 1000, refresh_token: refresh }
     },
 

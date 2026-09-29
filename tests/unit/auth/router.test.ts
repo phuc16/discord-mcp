@@ -85,11 +85,46 @@ describe('auth router', () => {
       response_type: 'code', client_id: client.client_id, redirect_uri: redirectTarget, code_challenge: 'c'.repeat(43),
       code_challenge_method: 'S256', state: 's1',
     })
-    const res = await fetch(`${base}/authorize?${qs}`, { redirect: 'manual' })
+    const page = await fetch(`${base}/authorize?${qs}`, { redirect: 'manual' })
+    expect(page.status).toBe(200)
+    expect(page.headers.get('content-security-policy')).toMatch(/frame-ancestors 'none'/)
+    expect(page.headers.get('x-frame-options')).toBe('DENY')
+    const html = await page.text()
+    expect(html).toContain(redirectTarget)
+    const csrf = /name="csrf" value="([^"]+)"/.exec(html)![1]!
+    const consentCookie = /mcp_consent=[^;]+/.exec(page.headers.get('set-cookie')!)![0]
+
+    const noCookie = await fetch(`${base}/authorize`, {
+      method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ ...Object.fromEntries(qs), consent: 'approve', csrf }),
+    })
+    expect(new URL(noCookie.headers.get('location') ?? 'http://none.invalid').origin).not.toBe('https://discord.com')
+
+    const res = await fetch(`${base}/authorize`, {
+      method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: consentCookie },
+      body: new URLSearchParams({ ...Object.fromEntries(qs), consent: 'approve', csrf }),
+    })
     expect(res.status).toBe(302)
     const loc = new URL(res.headers.get('location')!)
     expect(loc.origin).toBe('https://discord.com')
     expect(loc.searchParams.get('redirect_uri')).toBe(`${base}/callback`)
+    expect(loc.searchParams.get('prompt')).toBe('consent')
+    const stateCookie = /mcp_oauth_state=[^;]+/.exec(res.headers.getSetCookie().join(';'))![0]
+
+    const state = loc.searchParams.get('state')!
+    const unbound = await fetch(`${base}/callback?code=abc&state=${state}`, { redirect: 'manual' })
+    expect(unbound.status).toBe(400)
+    const bound = await fetch(`${base}/callback?code=abc&state=${state}`, { redirect: 'manual', headers: { cookie: stateCookie } })
+    expect(bound.status).toBe(302)
+    expect(new URL(bound.headers.get('location')!).origin).toBe('http://localhost:9999')
+  })
+
+  it('registration rejects non-https, non-loopback redirect uris', async () => {
+    const reg = await fetch(`${base}/register`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ redirect_uris: ['http://evil.example/cb'], token_endpoint_auth_method: 'none' }),
+    })
+    expect(reg.status).toBe(400)
   })
 
   describe('rate limits', () => {

@@ -45,4 +45,25 @@ describe('clients store', () => {
   it('rejects registration without redirect uris', async () => {
     await expect(createClientsStore(store).registerClient!({ redirect_uris: [] })).rejects.toThrow()
   })
+
+  it('rejects plain-http non-loopback and unparsable redirect URIs by default', async () => {
+    const cs = createClientsStore(store)
+    for (const uri of ['http://evil.example/cb', 'javascript:alert(1)', 'not a url', 'https://u:p@ok.example/cb', 'myapp://cb'])
+      await expect(cs.registerClient!({ redirect_uris: [uri] } as never)).rejects.toThrow()
+    for (const uri of ['https://a.example/cb', 'http://localhost:1/x', 'http://127.0.0.1:2', 'http://[::1]:3/cb'])
+      await expect(cs.registerClient!({ redirect_uris: [uri] } as never)).resolves.toBeTruthy()
+  })
+
+  it('a configured allowlist replaces the defaults with exact matches', async () => {
+    const cs = createClientsStore(store, { allowedRedirectUris: ['myapp://cb'] })
+    await expect(cs.registerClient!({ redirect_uris: ['myapp://cb'] } as never)).resolves.toBeTruthy()
+    await expect(cs.registerClient!({ redirect_uris: ['https://a.example/cb'] } as never)).rejects.toThrow()
+  })
+
+  it('enforces max_clients', async () => {
+    const cs = createClientsStore(store, { maxClients: 2 })
+    await cs.registerClient!({ redirect_uris: ['https://a.example/cb'] } as never)
+    await cs.registerClient!({ redirect_uris: ['https://a.example/cb'] } as never)
+    await expect(cs.registerClient!({ redirect_uris: ['https://a.example/cb'] } as never)).rejects.toThrow(/limit/)
+  })
 })

@@ -73,16 +73,70 @@ describe('auth provider', () => {
     client = reg
   })
 
-  const startAuth = async (over: { redirectUri?: string; codeChallenge?: string; state?: string } = {}) => {
-    const res = { redirect: vi.fn() }
-    await provider.authorize(client, { redirectUri: over.redirectUri ?? REDIRECT, codeChallenge: over.codeChallenge ?? CHALLENGE, state: over.state ?? 'client-state' } as never, res as never)
-    const url = new URL(res.redirect.mock.calls[0]![0] as string)
-    return url
+  interface MockRes {
+    headers: Record<string, string | string[]>
+    body: string
+    req: { method: string; headers: Record<string, string>; body?: Record<string, string> }
+    redirect: ReturnType<typeof vi.fn>
+    setHeader: (k: string, v: string) => MockRes
+    appendHeader: (k: string, v: string) => MockRes
+    status: () => MockRes
+    type: () => MockRes
+    send: (b: string) => MockRes
   }
+  const mockRes = (req: MockRes['req']): MockRes => {
+    const res: MockRes = {
+      headers: {},
+      body: '',
+      req,
+      redirect: vi.fn(),
+      setHeader: (k, v) => ((res.headers[k] = v), res),
+      appendHeader: (k, v) => {
+        const cur = res.headers[k]
+        res.headers[k] = cur === undefined ? v : [...(Array.isArray(cur) ? cur : [cur]), v]
+        return res
+      },
+      status: () => res,
+      type: () => res,
+      send: (b) => ((res.body = b), res),
+    }
+    return res
+  }
+  const cookieValue = (res: MockRes, name: string): string | undefined => {
+    const raw = res.headers['Set-Cookie']
+    const list = Array.isArray(raw) ? raw : raw === undefined ? [] : [raw]
+    return list.map((c) => new RegExp(`^${name}=([^;]*)`).exec(c)?.[1]).find((v) => v !== undefined)
+  }
+
+  const authParams = (over: { redirectUri?: string; codeChallenge?: string; state?: string } = {}) =>
+    ({ redirectUri: over.redirectUri ?? REDIRECT, codeChallenge: over.codeChallenge ?? CHALLENGE, state: over.state ?? 'client-state' }) as never
+
+  const consent = async (params = authParams()) => {
+    const get = mockRes({ method: 'GET', headers: {} })
+    await provider.authorize(client, params, get as never)
+    return { get, csrf: cookieValue(get, 'mcp_consent')! }
+  }
+
+  const approve = async (params = authParams(), decision = 'approve') => {
+    const { csrf } = await consent(params)
+    const post = mockRes({ method: 'POST', headers: { cookie: `mcp_consent=${csrf}` }, body: { consent: decision, csrf } })
+    await provider.authorize(client, params, post as never)
+    return post
+  }
+
+  let browserState: string | undefined
+  const startAuth = async (over: { redirectUri?: string; codeChallenge?: string; state?: string } = {}) => {
+    const post = await approve(authParams(over))
+    browserState = cookieValue(post, 'mcp_oauth_state')
+    return new URL(post.redirect.mock.calls[0]![0] as string)
+  }
+
+  const callback = (code: string, state: string, binding: string | undefined = state) =>
+    provider.handleDiscordCallback({ code, state, browserState: binding })
 
   const login = async (discordCode = 'admin') => {
     const url = await startAuth()
-    const { redirectTo } = await provider.handleDiscordCallback({ code: discordCode, state: url.searchParams.get('state')! })
+    const { redirectTo } = await callback(discordCode, url.searchParams.get('state')!)
     return new URL(redirectTo)
   }
 
@@ -91,6 +145,87 @@ describe('auth provider', () => {
     const code = cb.searchParams.get('code')!
     return provider.exchangeAuthorizationCode(client, code, undefined, REDIRECT)
   }
+
+  describe('consent', () => {
+    it('GET renders a consent page with client name and exact redirect uri, no discord redirect', async () => {
+      const { get, csrf } = await consent()
+      expect(get.redirect).not.toHaveBeenCalled()
+      expect(get.body).toContain(REDIRECT)
+      expect(get.body).toContain('name="csrf"')
+      expect(get.headers['Content-Security-Policy']).toMatch(/frame-ancestors 'none'/)
+      expect(get.headers['X-Frame-Options']).toBe('DENY')
+      expect(get.headers['Cache-Control']).toBe('no-store')
+      const cookie = String((get.headers['Set-Cookie'] as string))
+      expect(cookie).toMatch(/HttpOnly/)
+      expect(cookie).toMatch(/SameSite=Lax/)
+      expect(csrf).toMatch(/^[A-Za-z0-9_-]{43}$/)
+    })
+
+    it('escapes the client name and redirect uri', async () => {
+      const evil = await createClientsStore(store).registerClient!({ redirect_uris: ['https://ok.example/cb?a="><script>alert(1)</script>'], client_name: '<img src=x onerror=alert(1)>' } as never)
+      const get = mockRes({ method: 'GET', headers: {} })
+      await provider.authorize(evil, { redirectUri: 'https://ok.example/cb?a="><script>alert(1)</script>', codeChallenge: CHALLENGE } as never, get as never)
+      expect(get.body).not.toContain('<script>')
+      expect(get.body).not.toContain('<img')
+      expect(get.body).toContain('&lt;img')
+    })
+
+    it('POST without the csrf cookie, or with a mismatched token, is rejected', async () => {
+      const { csrf } = await consent()
+      const bad: MockRes['req'][] = [
+        { method: 'POST', headers: {}, body: { consent: 'approve', csrf } },
+        { method: 'POST', headers: { cookie: 'mcp_consent=other' }, body: { consent: 'approve', csrf } },
+        { method: 'POST', headers: { cookie: `mcp_consent=${csrf}` }, body: { consent: 'approve' } },
+      ]
+      for (const req of bad) {
+        const res = mockRes(req)
+        await expect(provider.authorize(client, authParams(), res as never)).rejects.toThrow(/consent/i)
+        expect(res.redirect).not.toHaveBeenCalled()
+      }
+      expect(store.oauth.consumePending('x', clock)).toBeNull()
+    })
+
+    it('deny redirects back to the client with access_denied and stores nothing', async () => {
+      const post = await approve(authParams(), 'deny')
+      const url = new URL(post.redirect.mock.calls[0]![0] as string)
+      expect(url.origin).toBe('http://localhost:9999')
+      expect(url.searchParams.get('error')).toBe('access_denied')
+      expect(url.searchParams.get('state')).toBe('client-state')
+    })
+
+    it('approval redirects to discord with prompt=consent and sets the state cookie', async () => {
+      const url = await startAuth()
+      expect(url.searchParams.get('prompt')).toBe('consent')
+      expect(browserState).toBe(url.searchParams.get('state'))
+    })
+
+    it('callback state must match the browser cookie', async () => {
+      const url = await startAuth()
+      const state = url.searchParams.get('state')!
+      await expect(provider.handleDiscordCallback({ code: 'admin', state, browserState: undefined })).rejects.toThrow(/browser/)
+      await expect(callback('admin', state, 'different')).rejects.toThrow(/browser/)
+      expect(exchangeSpy).not.toHaveBeenCalled()
+      await expect(callback('admin', state)).resolves.toBeTruthy()
+    })
+
+    it('enforces http.allowed_redirect_uris at authorize', async () => {
+      store = openStore(':memory:')
+      provider = createAuthProvider({
+        store, discordOAuth, discord: { listBotGuildIds: async () => botGuilds }, policy: { guildAllowed: () => true },
+        config: { publicBaseUrl: BASE, discordClientId: 'dcid', allowedRedirectUris: ['https://only.example/cb'] }, now: () => clock,
+      })
+      const c = await createClientsStore(store).registerClient!({ redirect_uris: [REDIRECT], client_name: 'c' } as never)
+      const res = mockRes({ method: 'GET', headers: {} })
+      await expect(provider.authorize(c, { redirectUri: REDIRECT, codeChallenge: CHALLENGE } as never, res as never)).rejects.toThrow(/policy/)
+    })
+
+    it('registeredOrigins is cached and invalidated on registration', async () => {
+      const first = provider.registeredOrigins()
+      expect(provider.registeredOrigins()).toBe(first)
+      await provider.clientsStore.registerClient!({ redirect_uris: ['https://new.example/cb'], client_name: 'n' } as never)
+      expect(provider.registeredOrigins().has('https://new.example')).toBe(true)
+    })
+  })
 
   describe('authorize', () => {
     it('redirects to discord with identify+guilds scope and stores pending state', async () => {
@@ -164,28 +299,27 @@ describe('auth provider', () => {
     })
 
     it('rejects an unknown state', async () => {
-      await expect(provider.handleDiscordCallback({ code: 'admin', state: 'nope' })).rejects.toThrow()
+      await expect(callback('admin', 'nope')).rejects.toThrow()
       expect(exchangeSpy).not.toHaveBeenCalled()
     })
 
     it('rejects a replayed state', async () => {
       const url = await startAuth()
       const state = url.searchParams.get('state')!
-      await provider.handleDiscordCallback({ code: 'admin', state })
-      await expect(provider.handleDiscordCallback({ code: 'admin', state })).rejects.toThrow()
+      await callback('admin', state)
+      await expect(callback('admin', state)).rejects.toThrow()
     })
 
     it('rejects an expired state', async () => {
       const url = await startAuth()
       clock += 600_001
-      await expect(provider.handleDiscordCallback({ code: 'admin', state: url.searchParams.get('state')! })).rejects.toThrow()
+      await expect(callback('admin', url.searchParams.get('state')!)).rejects.toThrow()
     })
 
     it('omits state when the client sent none', async () => {
-      const res = { redirect: vi.fn() }
-      await provider.authorize(client, { redirectUri: REDIRECT, codeChallenge: CHALLENGE } as never, res as never)
-      const state = new URL(res.redirect.mock.calls[0]![0] as string).searchParams.get('state')!
-      const { redirectTo } = await provider.handleDiscordCallback({ code: 'admin', state })
+      const post = await approve({ redirectUri: REDIRECT, codeChallenge: CHALLENGE } as never)
+      const state = new URL(post.redirect.mock.calls[0]![0] as string).searchParams.get('state')!
+      const { redirectTo } = await callback('admin', state)
       expect(new URL(redirectTo).searchParams.has('state')).toBe(false)
     })
   })
@@ -215,6 +349,19 @@ describe('auth provider', () => {
       expect(session.userName).toBe('alice')
       expect(JSON.stringify(session)).not.toContain(t.access_token)
       expect(JSON.stringify(session)).not.toContain(t.refresh_token!)
+    })
+
+    it('code replay revokes the family it issued', async () => {
+      const code = (await login()).searchParams.get('code')!
+      const t = await provider.exchangeAuthorizationCode(client, code, undefined, REDIRECT)
+      await expect(provider.challengeForAuthorizationCode(client, code)).rejects.toThrow()
+      await expect(provider.verifyAccessToken(t.access_token)).rejects.toThrow()
+      await expect(provider.exchangeRefreshToken(client, t.refresh_token!)).rejects.toThrow()
+    })
+
+    it('exchange without redirect_uri is rejected', async () => {
+      const code = (await login()).searchParams.get('code')!
+      await expect(provider.exchangeAuthorizationCode(client, code, undefined, undefined)).rejects.toThrow(/redirect_uri/)
     })
 
     it('rejects code replay', async () => {
@@ -277,6 +424,18 @@ describe('auth provider', () => {
       const t1 = await tokensFor()
       const t2 = await provider.exchangeRefreshToken(client, t1.refresh_token!)
       expect(Object.keys(store.oauth.getByAccessHash(hashSecret(t2.access_token))!.guilds)).toEqual([G1])
+    })
+
+    it('rotates before refreshing guilds so a slow refresh cannot orphan the family', async () => {
+      const t1 = await tokensFor()
+      let sawRotated = false
+      beforeIssue = async (s) => {
+        sawRotated = store.oauth.getByRefreshHash(hashSecret(t1.refresh_token!)) === null && s.refreshHash !== hashSecret(t1.refresh_token!)
+        return s
+      }
+      build()
+      await provider.exchangeRefreshToken(client, t1.refresh_token!)
+      expect(sawRotated).toBe(true)
     })
 
     it('revokes the family when beforeIssue leaves no guilds', async () => {

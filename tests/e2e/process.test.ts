@@ -127,7 +127,7 @@ describe('cli startup', () => {
     const dir = tmp()
     mkdirSync(join(dir, '.env'))
     const r = runCli(dir, ['check', '--config', join(dir, 'missing.yaml')])
-    expect(r.status).toBe(1)
+    expect(r.status).toBe(78)
     expect(r.stderr.trim().length).toBeGreaterThan(0)
     expect(r.stderr).not.toMatch(/\n\s+at |node:internal|Error: /)
   })

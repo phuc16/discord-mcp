@@ -6,3 +6,4 @@ coverage
 *.db-shm
 config.yaml
 .env
+!.env.example

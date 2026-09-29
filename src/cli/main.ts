@@ -1,7 +1,11 @@
-import { existsSync } from 'node:fs'
+import { loadDotEnv } from './env.js'
 import { run } from './run.js'
 
-if (existsSync('.env')) process.loadEnvFile('.env')
+const envError = loadDotEnv()
+if (envError) {
+  process.stderr.write(`${envError}\n`)
+  process.exit(1)
+}
 
 run(process.argv.slice(2)).then(
   (code) => {

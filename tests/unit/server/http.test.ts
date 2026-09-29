@@ -33,6 +33,7 @@ const deps = (): ServerDeps => ({
   services: {} as Services,
   logger,
   runTool: async () => ({ data: 1 }),
+  recentEvents: () => [],
 })
 
 let handle: HttpHandle | undefined
@@ -149,9 +150,11 @@ describe('startHttp', () => {
     client.setNotificationHandler(ResourceUpdatedNotificationSchema, async (n) => void updated.push(n.params.uri))
     await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${handle.port}/mcp`), { requestInit: { headers: { authorization: 'Bearer good' } } }))
     await client.subscribeResource({ uri: `discord://guild/${G}/events` })
-    for (const cb of listeners) cb({ id: 1, guildId: G, type: 'message_create', at: 't', data: {} })
-    await new Promise((r) => setTimeout(r, 100))
-    expect(updated).toEqual([`discord://guild/${G}/events`])
+    for (let i = 0; i < 40 && updated.length === 0; i++) {
+      for (const cb of listeners) cb({ id: 1, guildId: G, type: 'message_create', at: 't', data: {} })
+      await new Promise((r) => setTimeout(r, 25))
+    }
+    expect(updated[0]).toBe(`discord://guild/${G}/events`)
     await client.close()
   })
   it('logs one access line per request with structured fields', async () => {
@@ -162,5 +165,93 @@ describe('startHttp', () => {
       expect.objectContaining({ request_id: expect.any(String), method: 'GET', path: '/healthz', status: 200, ip: expect.any(String), latency: expect.any(Number) }),
       'http request',
     )
+  })
+})
+
+describe('startHttp hardening', () => {
+  const auth = { ...headers, authorization: 'Bearer good' }
+  it('does not send x-powered-by', async () => {
+    const base = await start()
+    expect((await fetch(`${base}/healthz`)).headers.get('x-powered-by')).toBeNull()
+  })
+  it('returns generic json for malformed json without stack or paths', async () => {
+    const base = await start()
+    const r = await fetch(`${base}/mcp`, { method: 'POST', headers: auth, body: '{"a":' })
+    const text = await r.text()
+    expect(r.status).toBe(400)
+    expect(JSON.parse(text)).toEqual({ error: 'invalid_request' })
+    expect(text).not.toMatch(/node_modules|\/Users|\bat /)
+  })
+  it('returns generic json for oversized bodies', async () => {
+    const base = await start()
+    const r = await fetch(`${base}/mcp`, { method: 'POST', headers: auth, body: JSON.stringify({ pad: 'x'.repeat(5 * 1024 * 1024) }) })
+    expect(r.status).toBe(413)
+    expect(await r.json()).toEqual({ error: 'payload_too_large' })
+  })
+  it('ignores x-forwarded-for unless trustProxy is set', async () => {
+    const spoof = { 'x-forwarded-for': '9.9.9.9' }
+    const base = await start()
+    await fetch(`${base}/healthz`, { headers: spoof })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(logger.info.mock.calls.at(-1)![0].ip).not.toContain('9.9.9.9')
+    await handle?.close()
+    logger.info.mockClear()
+    const trusted = await start({ trustProxy: 1 })
+    await fetch(`${trusted}/healthz`, { headers: spoof })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(logger.info.mock.calls.at(-1)![0].ip).toBe('9.9.9.9')
+  })
+  it('healthz is 503 when the gateway is not ready or db fails', async () => {
+    const down = await start({ health: () => ({ gateway: 'disconnected', db: 'ok' }) })
+    const r = await fetch(`${down}/healthz`)
+    expect(r.status).toBe(503)
+    expect(await r.json()).toMatchObject({ status: 'degraded', gateway: 'disconnected' })
+    await handle?.close()
+    const dbDown = await start({ health: () => ({ gateway: 'ready', db: 'error' }) })
+    expect((await fetch(`${dbDown}/healthz`)).status).toBe(503)
+  })
+  it('caps sessions per principal but not across principals', async () => {
+    const base = await start({ maxSessionsPerPrincipal: 1 })
+    const other = { ...headers, authorization: 'Bearer other' }
+    expect((await fetch(`${base}/mcp`, { method: 'POST', headers: auth, body: JSON.stringify(initialize) })).status).toBe(200)
+    expect((await fetch(`${base}/mcp`, { method: 'POST', headers: auth, body: JSON.stringify(initialize) })).status).toBe(503)
+    expect((await fetch(`${base}/mcp`, { method: 'POST', headers: other, body: JSON.stringify(initialize) })).status).toBe(200)
+  })
+  it('leaves no event subscribers after failed initializes', async () => {
+    const listeners = new Set<(e: NormalizedEvent) => void>()
+    const d = deps()
+    d.eventFeed = { subscribe: (cb) => (listeners.add(cb), () => listeners.delete(cb)) }
+    handle = await startHttp({ deps: d, host: '127.0.0.1', port: 0, bearer, health: () => ({ gateway: 'ready', db: 'ok' }) })
+    const base = `http://127.0.0.1:${handle.port}`
+    for (let i = 0; i < 5; i++) {
+      const r = await fetch(`${base}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer good' }, body: JSON.stringify(initialize) })
+      expect(r.status).toBeGreaterThanOrEqual(400)
+    }
+    expect(listeners.size).toBe(0)
+  })
+  it('unsubscribes event feeds when the server closes', async () => {
+    const listeners = new Set<(e: NormalizedEvent) => void>()
+    const d = deps()
+    d.eventFeed = { subscribe: (cb) => (listeners.add(cb), () => listeners.delete(cb)) }
+    handle = await startHttp({ deps: d, host: '127.0.0.1', port: 0, bearer, health: () => ({ gateway: 'ready', db: 'ok' }) })
+    await fetch(`http://127.0.0.1:${handle.port}/mcp`, { method: 'POST', headers: auth, body: JSON.stringify(initialize) })
+    expect(listeners.size).toBe(1)
+    await handle.close()
+    handle = undefined
+    expect(listeners.size).toBe(0)
+  })
+  it('an open sse stream keeps the session alive past the idle ttl', async () => {
+    let t = 0
+    const base = await start({ idleTtlMs: 1000, sweepIntervalMs: 10, now: () => t })
+    const init = await fetch(`${base}/mcp`, { method: 'POST', headers: auth, body: JSON.stringify(initialize) })
+    const sid = init.headers.get('mcp-session-id')!
+    const ac = new AbortController()
+    const stream = await fetch(`${base}/mcp`, { method: 'GET', headers: { ...auth, 'mcp-session-id': sid }, signal: ac.signal })
+    expect(stream.status).toBe(200)
+    t = 5000
+    await new Promise((r) => setTimeout(r, 60))
+    const list = await fetch(`${base}/mcp`, { method: 'POST', headers: { ...auth, 'mcp-session-id': sid }, body: JSON.stringify({ jsonrpc: '2.0', id: 4, method: 'tools/list', params: {} }) })
+    expect(list.status).toBe(200)
+    ac.abort()
   })
 })

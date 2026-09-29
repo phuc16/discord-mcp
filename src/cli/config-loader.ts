@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import { parse } from 'yaml'
 import { ConfigSchema } from '../contracts/index.js'
 import type { Config } from '../contracts/index.js'
@@ -21,5 +22,7 @@ export const loadConfig = (path: string): Config => {
     const lines = result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`)
     throw new Error(`invalid config ${path}:\n${lines.join('\n')}`)
   }
-  return result.data
+  const dbPath = result.data.database_path
+  if (dbPath === ':memory:' || isAbsolute(dbPath)) return result.data
+  return { ...result.data, database_path: resolve(dirname(resolve(path)), dbPath) }
 }

@@ -24,9 +24,11 @@ export interface ServerDeps {
   services: Services
   logger: Logger
   runTool: RunToolFn
+  recentEvents(guildId: string, limit: number): NormalizedEvent[]
   eventFeed?: EventFeed
 }
 
+const RESOURCE_EVENT_LIMIT = 100
 const EVENTS_URI = /^discord:\/\/guild\/(\d+)\/events$/
 
 const toContent = (payload: unknown): CallToolResult['content'] => [{ type: 'text', text: JSON.stringify(payload) }]
@@ -95,7 +97,7 @@ export const createMcpServer = (deps: ServerDeps, principalFor: () => Principal)
     async (uri) => {
       const guildId = guildIdOf(uri.href)
       if (!mayRead(guildId)) throw new McpToolError('guild_not_allowed', 'guild not allowed')
-      const events = await deps.services.events.poll(principalFor(), { guildId, sinceId: 0, limit: 100 })
+      const events = deps.recentEvents(guildId, RESOURCE_EVENT_LIMIT)
       return { contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify(events) }] }
     },
   )

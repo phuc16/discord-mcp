@@ -63,6 +63,22 @@ describe('buildRuntime', () => {
     expect(i.gateway.status()).toBe('disconnected')
     i.store.close()
   })
+  it('prunes expired store rows on a timer and stops on stop', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
+    try {
+      const i = input()
+      const runtime = buildRuntime(i, { http: false })
+      await runtime.start()
+      i.store.confirmations.create({ tokenHash: 't', inputHash: 'i', principalKey: 'p', tool: 'x', expiresAt: 1 })
+      await vi.advanceTimersByTimeAsync(11 * 60_000)
+      expect(i.store.confirmations.consume({ tokenHash: 't', inputHash: 'i', principalKey: 'p', tool: 'x', now: 0 })).toBe('invalid')
+      await runtime.stop()
+      expect(vi.getTimerCount()).toBe(0)
+      i.store.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
   it('requires the oauth port for http', () => {
     const i = input()
     i.discordOAuth = undefined
@@ -90,6 +106,9 @@ describe('launch (http)', () => {
     closer = handle
     const base = `http://127.0.0.1:${handle.port}`
     expect(await (await fetch(`${base}/healthz`)).json()).toEqual({ status: 'ok', gateway: 'ready', db: 'ok' })
+    const spy = vi.spyOn(i.gateway, 'status').mockReturnValue('disconnected')
+    expect((await fetch(`${base}/healthz`)).status).toBe(503)
+    spy.mockRestore()
     const denied = await fetch(`${base}/mcp`, { method: 'POST', headers, body: JSON.stringify(initialize) })
     expect(denied.status).toBe(401)
     expect(denied.headers.get('www-authenticate')).toContain('resource_metadata=')

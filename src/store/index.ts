@@ -3,6 +3,7 @@ import type { AuditRepo } from './audit-repo.js'
 import { createConfirmRepo } from './confirm-repo.js'
 import type { ConfirmRepo } from './confirm-repo.js'
 import { openDb } from './db.js'
+import { acquireLock } from './lock.js'
 import type { Db } from './db.js'
 import { createEventRepo } from './event-repo.js'
 import type { EventRepo } from './event-repo.js'
@@ -18,6 +19,7 @@ export interface Store {
   rules: RuleRepo
   oauth: OAuthRepo
   pruneExpired(now: number): void
+  ping(): void
   close(): void
 }
 
@@ -33,7 +35,14 @@ const pruneExpired = (db: Db, now: number): void =>
   })()
 
 export const openStore = (path: string): Store => {
-  const db = openDb(path)
+  const release = path === ':memory:' ? () => undefined : acquireLock(path)
+  let db: Db
+  try {
+    db = openDb(path)
+  } catch (err) {
+    release()
+    throw err
+  }
   return {
     audit: createAuditRepo(db),
     confirmations: createConfirmRepo(db),
@@ -41,7 +50,11 @@ export const openStore = (path: string): Store => {
     rules: createRuleRepo(db),
     oauth: createOAuthRepo(db),
     pruneExpired: (now) => pruneExpired(db, now),
-    close: () => void db.close(),
+    ping: () => void db.prepare('SELECT 1').get(),
+    close: () => {
+      db.close()
+      release()
+    },
   }
 }
 

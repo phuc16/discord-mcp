@@ -4,6 +4,7 @@ import { ResourceUpdatedNotificationSchema } from '@modelcontextprotocol/sdk/typ
 import { describe, expect, it, vi } from 'vitest'
 import { McpToolError } from '../../../src/contracts/index.js'
 import type { DiscordPort, NormalizedEvent, Principal, Services } from '../../../src/contracts/index.js'
+import { openStore } from '../../../src/store/index.js'
 import { createMcpServer } from '../../../src/server/mcp.js'
 import type { RunToolFn, ServerDeps } from '../../../src/server/mcp.js'
 import { buildToolRegistry } from '../../../src/server/registry.js'
@@ -15,6 +16,8 @@ const event = (id: number, guildId = G): NormalizedEvent => ({ id, guildId, type
 
 const setup = async (runTool: RunToolFn, opts: { feed?: boolean } = {}) => {
   const listeners = new Set<(e: NormalizedEvent) => void>()
+  const store = openStore(':memory:')
+  for (let i = 1; i <= 150; i++) store.events.append({ guildId: G, type: 'message_create', at: 't', data: { n: i } })
   const poll = vi.fn(async () => [event(1)])
   const services = {
     events: { poll },
@@ -26,6 +29,7 @@ const setup = async (runTool: RunToolFn, opts: { feed?: boolean } = {}) => {
     services,
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     runTool,
+    recentEvents: (guildId, limit) => store.events.recent(guildId, limit),
     eventFeed: opts.feed ? { subscribe: (cb) => (listeners.add(cb), () => listeners.delete(cb)) } : undefined,
   }
   const server = createMcpServer(deps, () => principal)
@@ -94,8 +98,11 @@ describe('createMcpServer', () => {
     const list = await client.listResources()
     expect(list.resources.map((r) => r.uri)).toEqual([`discord://guild/${G}/events`])
     const read = await client.readResource({ uri: `discord://guild/${G}/events` })
-    expect(JSON.parse((read.contents[0] as { text: string }).text)).toEqual([event(1)])
-    expect(poll).toHaveBeenCalledWith(principal, { guildId: G, sinceId: 0, limit: 100 })
+    const events = JSON.parse((read.contents[0] as { text: string }).text) as { id: number; data: { n: number } }[]
+    expect(events).toHaveLength(100)
+    expect(events[0]!.data.n).toBe(51)
+    expect(events[99]!.data.n).toBe(150)
+    expect(poll).not.toHaveBeenCalled()
   })
   it('rejects reads and subscriptions for guilds outside policy', async () => {
     const { client } = await setup(async () => ({ data: 1 }))

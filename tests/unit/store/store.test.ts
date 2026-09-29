@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -197,6 +197,37 @@ describe('migration safety', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('single instance lock', () => {
+  it('refuses a second open of the same database and releases on close', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'store-'))
+    const path = join(dir, 'l.db')
+    try {
+      const a = openStore(path)
+      expect(() => openStore(path)).toThrow(/already in use/)
+      a.close()
+      openStore(path).close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('takes over a stale lock left by a dead process', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'store-'))
+    const path = join(dir, 's.db')
+    try {
+      writeFileSync(`${path}.lock`, '2147483646')
+      openStore(path).close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  it('pings', () => {
+    const s = openStore(':memory:')
+    expect(() => s.ping()).not.toThrow()
+    s.close()
+    expect(() => s.ping()).toThrow()
   })
 })
 

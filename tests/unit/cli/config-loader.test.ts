@@ -1,6 +1,6 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from '../../../src/cli/config-loader.js'
 
@@ -35,5 +35,14 @@ describe('loadConfig', () => {
   })
   it('rejects empty file', () => {
     expect(() => loadConfig(write(''))).toThrow(/guilds/)
+  })
+  it('resolves a relative database_path against the config directory', () => {
+    const p = write('guilds:\n  "123456789012345678":\n    max_tier: write\ndatabase_path: ./data/x.db\n')
+    expect(loadConfig(p).database_path).toBe(join(dirname(p), 'data', 'x.db'))
+  })
+  it('keeps absolute and in-memory database paths', () => {
+    const g = 'guilds:\n  "123456789012345678":\n    max_tier: write\n'
+    expect(loadConfig(write(`${g}database_path: /var/db/x.db\n`)).database_path).toBe('/var/db/x.db')
+    expect(loadConfig(write(`${g}database_path: ":memory:"\n`)).database_path).toBe(':memory:')
   })
 })

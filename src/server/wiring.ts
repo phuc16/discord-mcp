@@ -38,6 +38,8 @@ export interface Runtime {
   stop(): Promise<void>
 }
 
+const STORE_PRUNE_INTERVAL_MS = 10 * 60_000
+
 export const buildRuntime = (input: RuntimeInput, opts: { http: boolean }): Runtime => {
   const { config, env, logger, store, discord, gateway } = input
   const policy = new PolicyEngine(config)
@@ -77,6 +79,7 @@ export const buildRuntime = (input: RuntimeInput, opts: { http: boolean }): Runt
     discord,
     services,
     logger,
+    recentEvents: (guildId, limit) => events.recent(guildId, limit),
     eventFeed: { subscribe: (cb) => events.subscribe(cb) },
     runTool: (def, rawInput, principal, o) => runTool(pipeline, def, rawInput, principal, { discord, services, logger, ...o }),
   }
@@ -108,18 +111,31 @@ export const buildRuntime = (input: RuntimeInput, opts: { http: boolean }): Runt
     }
   }
 
+  let pruneTimer: NodeJS.Timeout | undefined
+
   return {
     deps,
     events,
     rules,
     http,
     async start() {
+      store.pruneExpired(Date.now())
+      pruneTimer = setInterval(() => {
+        try {
+          store.pruneExpired(Date.now())
+        } catch (err) {
+          logger.warn({ error: err instanceof Error ? err.name : 'unknown' }, 'store prune failed')
+        }
+      }, STORE_PRUNE_INTERVAL_MS)
+      pruneTimer.unref()
       await gateway.start()
       events.start()
       rules.start()
       http?.start()
     },
     async stop() {
+      if (pruneTimer) clearInterval(pruneTimer)
+      pruneTimer = undefined
       http?.stop()
       rules.stop()
       events.stop()

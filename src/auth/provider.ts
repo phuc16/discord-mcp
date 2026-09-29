@@ -6,7 +6,7 @@ import { InvalidGrantError, InvalidRequestError, InvalidTokenError } from '@mode
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js'
 import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js'
 import { McpToolError } from '../contracts/index.js'
-import type { DiscordOAuthPort, DiscordPort } from '../contracts/index.js'
+import type { DiscordOAuthPort, DiscordPort, Logger } from '../contracts/index.js'
 import type { Session, Store } from '../store/index.js'
 import { createClientsStore, redirectUriAllowed } from './clients-store.js'
 import { renderConsentPage } from './consent.js'
@@ -20,6 +20,22 @@ const ACCESS_TTL_MS = 60 * 60_000
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60_000
 const ORIGINS_TTL_MS = 60_000
 const REFRESH_GRACE_MS = 10_000
+export type DenialReason =
+  | 'discord_code_exchange_failed'
+  | 'discord_user_fetch_failed'
+  | 'no_guilds_from_discord'
+  | 'not_admin_in_any_guild'
+  | 'bot_not_in_any_admin_guild'
+  | 'no_allowlisted_guild'
+  | 'state_invalid'
+  | 'state_cookie_missing'
+  | 'internal_error'
+
+const statusOf = (err: unknown): number | undefined => {
+  const status = err instanceof McpToolError ? err.details.status : undefined
+  return typeof status === 'number' ? status : undefined
+}
+
 export const CONSENT_COOKIE = 'mcp_consent'
 export const STATE_COOKIE = 'mcp_oauth_state'
 
@@ -45,7 +61,7 @@ const bodyField = (req: Response['req'] | undefined, name: string): string | und
 }
 
 export interface AuthProvider extends OAuthServerProvider {
-  handleDiscordCallback(req: { code: string; state: string; browserState: string | undefined }): Promise<{ redirectTo: string }>
+  handleDiscordCallback(req: { code: string; state: string; browserState: string | undefined; correlationId?: string; requestId?: string }): Promise<{ redirectTo: string }>
   registeredOrigins(): ReadonlySet<string>
 }
 
@@ -55,6 +71,7 @@ export interface AuthProviderDeps {
   discord: Pick<DiscordPort, 'listBotGuildIds'>
   policy: { guildAllowed(guildId: string): boolean }
   config: { publicBaseUrl: string; discordClientId: string; allowedRedirectUris?: string[]; maxClients?: number }
+  logger?: Logger
   now?: () => number
   beforeIssue?: (session: Session) => Promise<Session>
 }
@@ -193,25 +210,59 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
     },
 
     async handleDiscordCallback(req) {
-      if (!safeEqual(req.browserState, req.state)) throw new InvalidRequestError('state does not match this browser session')
+      const base = { correlation_id: req.correlationId ?? randomUUID(), request_id: req.requestId ?? req.correlationId ?? null }
+      const deny = (reason: DenialReason, extra: Record<string, unknown> = {}): void =>
+        d.logger?.warn({ ...base, reason, ...extra }, 'oauth callback denied')
+      if (req.browserState === undefined || req.browserState === '') {
+        deny('state_cookie_missing')
+        throw new InvalidRequestError('state does not match this browser session')
+      }
+      if (!safeEqual(req.browserState, req.state)) {
+        deny('state_invalid', { detail: 'cookie_mismatch' })
+        throw new InvalidRequestError('state does not match this browser session')
+      }
       const pending = d.store.oauth.consumePending(req.state, now())
-      if (!pending) throw new InvalidRequestError('unknown or expired state')
+      if (!pending) {
+        deny('state_invalid', { detail: 'unknown_or_expired' })
+        throw new InvalidRequestError('unknown or expired state')
+      }
       const back = (params: Record<string, string>): { redirectTo: string } => ({
         redirectTo: clientRedirect(pending.redirectUri, { ...params, state: pending.clientState }),
       })
+      const denied = (): { redirectTo: string } => back({ error: 'access_denied' })
+      let stage: 'exchange' | 'fetch' | 'other' = 'exchange'
+      let who: { discord_user_id?: string; user_name?: string } = {}
       try {
         const { accessToken } = await d.discordOAuth.exchangeCode(req.code, callbackUrl)
+        stage = 'fetch'
         const [user, userGuilds, botGuildIds] = await Promise.all([
           d.discordOAuth.fetchUser(accessToken),
           d.discordOAuth.fetchUserGuilds(accessToken),
-          d.discord.listBotGuildIds(),
+          d.discord.listBotGuildIds().catch((err: unknown) => {
+            stage = 'other'
+            throw err
+          }),
         ])
+        stage = 'other'
+        who = { discord_user_id: user.id, user_name: user.username }
         const botGuilds = new Set(botGuildIds)
         const guilds: Record<string, string> = {}
+        let admin = 0
+        let withBot = 0
         for (const g of userGuilds) {
-          if (isManager(g.permissions) && botGuilds.has(g.id) && d.policy.guildAllowed(g.id)) guilds[g.id] = g.permissions
+          if (!isManager(g.permissions)) continue
+          admin += 1
+          if (!botGuilds.has(g.id)) continue
+          withBot += 1
+          if (d.policy.guildAllowed(g.id)) guilds[g.id] = g.permissions
         }
-        if (Object.keys(guilds).length === 0) return back({ error: 'access_denied' })
+        const allowlisted = Object.keys(guilds).length
+        if (allowlisted === 0) {
+          const reason: DenialReason =
+            userGuilds.length === 0 ? 'no_guilds_from_discord' : admin === 0 ? 'not_admin_in_any_guild' : withBot === 0 ? 'bot_not_in_any_admin_guild' : 'no_allowlisted_guild'
+          deny(reason, { ...who, guilds_returned: userGuilds.length, guilds_admin: admin, guilds_admin_with_bot: withBot, guilds_allowlisted: allowlisted })
+          return denied()
+        }
         const code = newToken()
         d.store.oauth.saveCode({
           codeHash: hashSecret(code),
@@ -225,6 +276,9 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
         })
         return back({ code })
       } catch (err) {
+        const reason: DenialReason =
+          stage === 'exchange' ? 'discord_code_exchange_failed' : stage === 'fetch' ? 'discord_user_fetch_failed' : 'internal_error'
+        deny(reason, { ...who, discord_status: statusOf(err) ?? null })
         return back({ error: err instanceof McpToolError && err.code === 'unauthorized' ? 'access_denied' : 'server_error' })
       }
     },

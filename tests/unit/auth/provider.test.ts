@@ -34,6 +34,7 @@ describe('auth provider', () => {
   let exchangeSpy: ReturnType<typeof vi.fn>
   let beforeIssue: ((s: import('../../../src/store/index.js').Session) => Promise<import('../../../src/store/index.js').Session>) | undefined
 
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
   const build = () => {
     provider = createAuthProvider({
       store,
@@ -41,6 +42,7 @@ describe('auth provider', () => {
       discord: { listBotGuildIds: async () => botGuilds },
       policy: { guildAllowed: (g) => allowed.has(g) },
       config: { publicBaseUrl: BASE, discordClientId: 'dcid' },
+      logger: logger as never,
       now: () => clock,
       beforeIssue: beforeIssue ? (s) => beforeIssue!(s) : undefined,
     })
@@ -68,6 +70,7 @@ describe('auth provider', () => {
       fetchUserGuilds: async (t) => users[t.replace('at-', '')]!.guilds,
     }
     beforeIssue = undefined
+    logger.warn.mockClear()
     build()
     const reg = await createClientsStore(store).registerClient!({ redirect_uris: [REDIRECT], client_name: 'c' } as never)
     client = reg
@@ -321,6 +324,87 @@ describe('auth provider', () => {
       const state = new URL(post.redirect.mock.calls[0]![0] as string).searchParams.get('state')!
       const { redirectTo } = await callback('admin', state)
       expect(new URL(redirectTo).searchParams.has('state')).toBe(false)
+    })
+  })
+
+  describe('denial logging', () => {
+    const denial = () => {
+      const call = logger.warn.mock.calls.find((c) => c[1] === 'oauth callback denied')
+      return call?.[0] as Record<string, unknown> | undefined
+    }
+    const run = async (discordCode: string) => {
+      const url = await startAuth()
+      const state = url.searchParams.get('state')!
+      const { redirectTo } = await provider.handleDiscordCallback({ code: discordCode, state, browserState: state, correlationId: 'corr-1', requestId: 'req-1' })
+      return new URL(redirectTo)
+    }
+    const expectClean = () => {
+      const line = JSON.stringify(logger.warn.mock.calls)
+      for (const secret of ['at-admin', 'at-plain', 'client-state', CHALLENGE, VERIFIER]) expect(line).not.toContain(secret)
+    }
+
+    it('not an admin anywhere', async () => {
+      const back = await run('plain')
+      expect(back.searchParams.get('error')).toBe('access_denied')
+      expect([...back.searchParams.keys()].sort()).toEqual(['error', 'state'])
+      expect(denial()).toMatchObject({
+        correlation_id: 'corr-1', request_id: 'req-1', reason: 'not_admin_in_any_guild', discord_user_id: 'u2', user_name: 'bob',
+        guilds_returned: 1, guilds_admin: 0, guilds_admin_with_bot: 0, guilds_allowlisted: 0,
+      })
+      expectClean()
+    })
+
+    it('no guilds from discord', async () => {
+      users.plain!.guilds = []
+      await run('plain')
+      expect(denial()).toMatchObject({ reason: 'no_guilds_from_discord', guilds_returned: 0 })
+    })
+
+    it('admin but bot not present', async () => {
+      botGuilds = []
+      await run('admin')
+      expect(denial()).toMatchObject({ reason: 'bot_not_in_any_admin_guild', guilds_returned: 3, guilds_admin: 3, guilds_admin_with_bot: 0 })
+    })
+
+    it('admin with bot but not allowlisted', async () => {
+      allowed = new Set()
+      await run('admin')
+      expect(denial()).toMatchObject({ reason: 'no_allowlisted_guild', guilds_admin: 3, guilds_admin_with_bot: 2, guilds_allowlisted: 0 })
+    })
+
+    it('code exchange failure carries the discord status only', async () => {
+      exchangeSpy.mockRejectedValueOnce(new McpToolError('unauthorized', 'discord authorization failed', { status: 400 }))
+      const back = await run('admin')
+      expect(back.searchParams.get('error')).toBe('access_denied')
+      expect(denial()).toMatchObject({ reason: 'discord_code_exchange_failed', discord_status: 400 })
+      expectClean()
+    })
+
+    it('user fetch failure', async () => {
+      discordOAuth.fetchUser = async () => {
+        throw new McpToolError('unauthorized', 'discord authorization failed', { status: 401 })
+      }
+      await run('admin')
+      expect(denial()).toMatchObject({ reason: 'discord_user_fetch_failed', discord_status: 401 })
+    })
+
+    it('state problems are logged with a reason', async () => {
+      const url = await startAuth()
+      const state = url.searchParams.get('state')!
+      await expect(provider.handleDiscordCallback({ code: 'admin', state, browserState: undefined })).rejects.toThrow()
+      expect(denial()).toMatchObject({ reason: 'state_cookie_missing' })
+      logger.warn.mockClear()
+      await expect(provider.handleDiscordCallback({ code: 'admin', state, browserState: 'other' })).rejects.toThrow()
+      expect(denial()).toMatchObject({ reason: 'state_invalid' })
+      logger.warn.mockClear()
+      const fresh = 'z'.repeat(43)
+      await expect(provider.handleDiscordCallback({ code: 'admin', state: fresh, browserState: fresh })).rejects.toThrow()
+      expect(denial()).toMatchObject({ reason: 'state_invalid' })
+    })
+
+    it('successful logins log no denial', async () => {
+      await run('admin')
+      expect(denial()).toBeUndefined()
     })
   })
 

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import express from 'express'
 import { mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js'
 import { OAuthError, ServerError } from '@modelcontextprotocol/sdk/server/auth/errors.js'
@@ -57,7 +58,7 @@ export const createAuthRouter = (provider: AuthProvider, d: { publicBaseUrl: str
       }
       const browserState = parseCookies(req.headers.cookie)[STATE_COOKIE]
       res.setHeader('Set-Cookie', `${STATE_COOKIE}=; HttpOnly; SameSite=Lax; Path=/callback; Max-Age=0${base.protocol === 'https:' ? '; Secure' : ''}`)
-      const { redirectTo } = await provider.handleDiscordCallback({ code, state, browserState })
+      const { redirectTo } = await provider.handleDiscordCallback({ code, state, browserState, correlationId: randomUUID(), requestId: typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'].slice(0, 64).replace(/[^\w.-]/g, '_') : undefined })
       res.redirect(302, redirectTo)
     } catch (err) {
       const e = err instanceof OAuthError ? err : new ServerError('Internal Server Error')

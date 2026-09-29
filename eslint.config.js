@@ -23,7 +23,7 @@ const boundaryConfigs = Object.entries(allowed).map(([mod, ok]) => ({
         paths: mod === 'discord' ? [] : [discordJs],
         patterns: modules
           .filter((m) => m !== mod && !ok.includes(m))
-          .map((m) => ({ group: [`**/${m}`, `**/${m}/**`], message: `src/${mod} must not import src/${m}` })),
+          .map((m) => ({ group: ['../', '../../', '../../../'].flatMap((up) => [`${up}${m}`, `${up}${m}/**`]), message: `src/${mod} must not import src/${m}` })),
       },
     ],
   },

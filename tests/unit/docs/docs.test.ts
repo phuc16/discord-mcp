@@ -8,8 +8,12 @@ const files = ['README.md', 'docs/getting-started.md', 'docs/smoke-checklist.md'
 
 describe('getting-started', () => {
   const doc = read('docs/getting-started.md')
-  it.each(['DISCORD_BOT_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET', 'PUBLIC_BASE_URL', 'TOKEN_SIGNING_KEY'])('mentions %s', (name) => {
+  it.each(['DISCORD_BOT_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET', 'PUBLIC_BASE_URL'])('mentions %s', (name) => {
     expect(doc).toContain(name)
+  })
+  it('documents LOG_LEVEL and DISCORD_MCP_CONFIG', () => {
+    expect(doc).toContain('LOG_LEVEL')
+    expect(doc).toContain('DISCORD_MCP_CONFIG')
   })
   it.each(['invite-url', '--check', 'claude mcp add', 'claude mcp add --transport http', 'Server Members', 'Message Content', '/callback', 'config.yaml'])(
     'mentions %s',

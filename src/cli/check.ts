@@ -16,7 +16,7 @@ export interface CheckResult {
 }
 
 const STDIO_ENV = ['DISCORD_BOT_TOKEN']
-const HTTP_ENV = ['DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET', 'PUBLIC_BASE_URL', 'TOKEN_SIGNING_KEY']
+const HTTP_ENV = ['DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET', 'PUBLIC_BASE_URL']
 
 export const runCheck = async (opts: CheckOptions): Promise<CheckResult> => {
   const env = opts.env ?? process.env

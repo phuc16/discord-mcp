@@ -43,7 +43,7 @@ discord-mcp --check --config config.yaml
 discord-mcp --check --config config.yaml --online
 ```
 
-`--check` validates the config file and required environment variables. `--online` also confirms the bot is a member of each configured guild. Add `--http` to require the HTTP variables: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL` and `TOKEN_SIGNING_KEY`.
+`--check` validates the config file and required environment variables. `--online` also confirms the bot is a member of each configured guild. Add `--http` to require the HTTP variables: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `PUBLIC_BASE_URL`.
 
 ## 8. Connect Claude Code
 
@@ -62,10 +62,15 @@ claude mcp add --transport http discord https://mcp.example.com/mcp
 
 Then run `/mcp` in Claude Code and authenticate with Discord. Only guilds where you are an administrator or hold Manage Server, and where the bot is present and allowed by the config, become available.
 
-## 9. Live events over HTTP
+## 9. Optional environment
+
+- `DISCORD_MCP_CONFIG`: config path used when `--config` is not given (default `config.yaml`).
+- `LOG_LEVEL`: pino level for logs on stderr (default `info`).
+
+## 10. Live events over HTTP
 
 HTTP mode keeps one MCP session per client. Subscribe to `discord://guild/{guild_id}/events` and the server pushes `resources/updated` over the session's stream. Sessions are bound to the authenticated caller, capped in number, and expire after 30 minutes idle. If your client cannot hold a stream open, poll with the `events_poll` tool using the last seen event id.
 
-## 10. Smoke test
+## 11. Smoke test
 
 Follow the [smoke checklist](smoke-checklist.md) against a throwaway guild before pointing the server at a real one.

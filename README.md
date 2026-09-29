@@ -43,7 +43,7 @@ Full setup, including Discord application creation and HTTP mode with OAuth logi
 
 ## Configuration
 
-See [config.example.yaml](config.example.yaml). Secrets come from the environment: `DISCORD_BOT_TOKEN`, and for HTTP `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL`, `TOKEN_SIGNING_KEY`. The config path comes from `--config` or `DISCORD_MCP_CONFIG`.
+See [config.example.yaml](config.example.yaml). Secrets come from the environment: `DISCORD_BOT_TOKEN`, and for HTTP `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL`. Optional: `LOG_LEVEL` (default `info`). The config path comes from `--config` or `DISCORD_MCP_CONFIG`. Tokens are opaque random values stored hashed, so no signing key is needed.
 
 ## Development
 

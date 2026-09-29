@@ -19,7 +19,7 @@ describe('runCheck', () => {
   it('reports each missing env var for http', async () => {
     const r = await runCheck({ configPath: cfg(), http: true, online: false, env: {} })
     expect(r.ok).toBe(false)
-    for (const name of ['DISCORD_BOT_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET', 'PUBLIC_BASE_URL', 'TOKEN_SIGNING_KEY']) {
+    for (const name of ['DISCORD_BOT_TOKEN', 'DISCORD_CLIENT_ID', 'DISCORD_CLIENT_SECRET', 'PUBLIC_BASE_URL']) {
       expect(r.problems.some((p) => p.includes(name))).toBe(true)
     }
   })

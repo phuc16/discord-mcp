@@ -73,7 +73,6 @@ export const startServer = async (opts: { configPath: string; http: boolean }): 
   }
   if (opts.http) {
     requireEnv(env, 'PUBLIC_BASE_URL')
-    requireEnv(env, 'TOKEN_SIGNING_KEY')
   }
   const handle = await launch(input, { http: opts.http })
   logger.info({ method: 'startup', path: opts.http ? '/mcp' : 'stdio', status: 'listening' }, 'discord-mcp started')

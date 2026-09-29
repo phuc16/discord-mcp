@@ -37,3 +37,23 @@ describe('run', () => {
     err.mockRestore()
   })
 })
+
+describe('run (help and server)', () => {
+  it('prints usage on --help', async () => {
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    expect(await run(['--help'], {})).toBe(0)
+    expect(String(out.mock.calls[0]?.[0])).toContain('usage')
+    out.mockRestore()
+  })
+  it('--check succeeds with a valid config and token', async () => {
+    const { mkdtempSync, writeFileSync } = await import('node:fs')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const p = join(mkdtempSync(join(tmpdir(), 'run-')), 'c.yaml')
+    writeFileSync(p, 'guilds:\n  "123456789012345678":\n    max_tier: read\n')
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
+    expect(await run(['--check'], { DISCORD_BOT_TOKEN: 't', DISCORD_MCP_CONFIG: p })).toBe(0)
+    expect(String(out.mock.calls[0]?.[0])).toBe('ok\n')
+    out.mockRestore()
+  })
+})

@@ -57,3 +57,19 @@ describe('tierFromDiscordPermissions', () => {
     expect(tierFromDiscordPermissions(PERM.MANAGE_CHANNELS | PERM.BAN_MEMBERS, 'meta')).toBe('read')
   })
 })
+
+describe('per-tool permission bits', () => {
+  it.each([
+    ['mod_kick', PERM.KICK_MEMBERS, PERM.BAN_MEMBERS | PERM.MODERATE_MEMBERS],
+    ['mod_ban', PERM.BAN_MEMBERS, PERM.KICK_MEMBERS | PERM.MODERATE_MEMBERS],
+    ['mod_timeout', PERM.MODERATE_MEMBERS, PERM.KICK_MEMBERS | PERM.BAN_MEMBERS],
+    ['members_update_nick', PERM.MANAGE_NICKNAMES, PERM.MANAGE_ROLES | PERM.MANAGE_GUILD],
+    ['members_move_voice', PERM.MOVE_MEMBERS, PERM.MANAGE_ROLES | PERM.MANAGE_GUILD],
+    ['members_add_role', PERM.MANAGE_ROLES, PERM.MANAGE_NICKNAMES | PERM.MANAGE_GUILD],
+  ])('%s needs its own bit', (tool, own, others) => {
+    const group = tool.startsWith('mod_') ? 'moderation' : 'members'
+    expect(tierFromDiscordPermissions(own, group, tool)).toBe('destructive')
+    expect(tierFromDiscordPermissions(others, group, tool)).toBe('read')
+    expect(tierFromDiscordPermissions(PERM.ADMINISTRATOR, group, tool)).toBe('destructive')
+  })
+})

@@ -53,7 +53,7 @@ describe('runTool', () => {
   let opts: RunOptions
   let log: ReturnType<typeof logger>
 
-  const build = (deny: string[] = [], perMinute = 100) => {
+  const build = (deny: string[] = [], perMinute = 100, allowTokenConfirm = false) => {
     const policy = new PolicyEngine({
       guilds: { [G]: { max_tier: 'destructive' }, [H]: { max_tier: 'write' } },
       tools: { deny },
@@ -63,6 +63,7 @@ describe('runTool', () => {
       confirm: createConfirmService({ store, now: () => clock }),
       audit: createAuditWriter({ store, logger: log }),
       limiter: createBulkLimiter({ perMinute, now: () => clock }),
+      allowTokenConfirm,
       now: () => clock,
     }
   }
@@ -140,7 +141,87 @@ describe('runTool', () => {
     await runTool(deps, def, { guild_id: G }, admin, opts)
   })
 
-  describe('destructive', () => {
+  describe('destructive (default: elicitation required)', () => {
+    const accept = async () => 'accept' as const
+    const input = { guild_id: G, channel_id: C }
+
+    it('no elicit support fails closed without a token', async () => {
+      const handler = vi.fn(async () => ({ data: 'done' }))
+      const def = mk({ tier: 'destructive', handler })
+      const err = (await runTool(deps, def, input, admin, opts).catch((e: unknown) => e)) as McpToolError
+      expect(err.code).toBe('confirm_required')
+      expect(err.details.confirm_token).toBeUndefined()
+      expect(err.details.preview).toMatchObject({ summary: 'delete it' })
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('a supplied confirm_token is ignored when token flow is off', async () => {
+      const handler = vi.fn(async () => ({ data: 'done' }))
+      const def = mk({ tier: 'destructive', handler })
+      await expect(runTool(deps, def, { ...input, confirm_token: 'x'.repeat(20) }, admin, opts)).rejects.toMatchObject({ code: 'confirm_required' })
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('elicit unsupported and elicit throwing both fail closed', async () => {
+      const def = mk({ tier: 'destructive' })
+      const a = (await runTool(deps, def, input, admin, { ...opts, elicit: async () => 'unsupported' }).catch((e: unknown) => e)) as McpToolError
+      expect(a.code).toBe('confirm_required')
+      expect(a.details.confirm_token).toBeUndefined()
+      const b = (await runTool(deps, def, input, admin, { ...opts, elicit: async () => { throw new Error('boom') } }).catch((e: unknown) => e)) as McpToolError
+      expect(b.code).toBe('confirm_required')
+      expect(b.details.confirm_token).toBeUndefined()
+      expect(log.warn).toHaveBeenCalled()
+    })
+
+    it('elicitation accept runs handler for every principal kind', async () => {
+      const handler = vi.fn(async () => ({ data: 'ok' }))
+      const elicit = vi.fn(accept)
+      const def = mk({ tier: 'destructive', handler })
+      await expect(runTool(deps, def, { guild_id: G }, admin, { ...opts, elicit })).resolves.toEqual({ data: 'ok' })
+      await expect(runTool(deps, def, { guild_id: G }, stdio, { ...opts, elicit })).resolves.toEqual({ data: 'ok' })
+      expect(elicit).toHaveBeenCalledWith('delete it')
+      expect(handler).toHaveBeenCalledTimes(2)
+    })
+
+    it('elicitation decline is denied with no token', async () => {
+      const handler = vi.fn()
+      const def = mk({ tier: 'destructive', handler })
+      await expect(runTool(deps, def, input, admin, { ...opts, elicit: async () => 'decline' })).rejects.toMatchObject({
+        code: 'confirm_invalid',
+        message: 'declined by user',
+      })
+      expect(handler).not.toHaveBeenCalled()
+    })
+
+    it('sanitizes untrusted text in the elicitation prompt', async () => {
+      const def = mk({ tier: 'destructive' })
+      def.preview = async () => ({ summary: `delete **@everyone**\n<@123> \u202e${'x'.repeat(3000)}`, affected: {} })
+      const elicit = vi.fn(async (_m: string) => 'accept' as const)
+      await runTool(deps, def, input, admin, { ...opts, elicit })
+      const shown = elicit.mock.calls[0]![0] as string
+      expect(shown).not.toMatch(/[*@<>\n\u202e]/)
+      expect(shown.length).toBeLessThanOrEqual(1501)
+    })
+
+    it('preauthorized skips confirmation but still enforces tier', async () => {
+      const handler = vi.fn(async () => ({ data: 'ok' }))
+      const def = mk({ tier: 'destructive', handler })
+      await expect(runTool(deps, def, { guild_id: G }, admin, { ...opts, preauthorized: true })).resolves.toEqual({ data: 'ok' })
+      await expect(runTool(deps, def, { guild_id: H }, admin, { ...opts, preauthorized: true })).rejects.toMatchObject({ code: 'tier_exceeded' })
+    })
+
+    it('bulk limiter slot is taken only on execution, not previews or invalid tokens', async () => {
+      build([], 1)
+      const def = mk({ name: 'mod_bulk_ban', tier: 'destructive' })
+      for (let i = 0; i < 3; i++) await runTool(deps, def, input, admin, opts).catch(() => undefined)
+      await expect(runTool(deps, def, input, admin, { ...opts, elicit: accept })).resolves.toEqual({ data: 'done' })
+      await expect(runTool(deps, def, input, admin, { ...opts, elicit: accept })).rejects.toMatchObject({ code: 'rate_limited' })
+    })
+  })
+
+  describe('destructive (allow_token_confirm)', () => {
+    beforeEach(() => build([], 100, true))
+
     it('without token returns preview and token, handler untouched', async () => {
       const handler = vi.fn(async () => ({ data: 'done' }))
       const def = mk({ tier: 'destructive', handler })
@@ -163,7 +244,6 @@ describe('runTool', () => {
       const input = { guild_id: G, channel_id: C }
       const confirm_token = await getToken(def, input)
       await expect(runTool(deps, def, { ...input, confirm_token }, admin, opts)).resolves.toEqual({ data: 'gone' })
-      expect(handler).toHaveBeenCalledTimes(1)
       await expect(runTool(deps, def, { ...input, confirm_token }, admin, opts)).rejects.toMatchObject({ code: 'confirm_invalid' })
       expect(handler).toHaveBeenCalledTimes(1)
     })
@@ -177,59 +257,27 @@ describe('runTool', () => {
       expect(handler.mock.calls[0]![1]).toEqual(input)
     })
 
-    it('token for a different input is rejected', async () => {
+    it('token for a different input or principal is rejected; expired token rejected', async () => {
       const def = mk({ tier: 'destructive' })
-      const confirm_token = await getToken(def, { guild_id: G, channel_id: C })
-      await expect(runTool(deps, def, { guild_id: G, channel_id: D, confirm_token }, admin, opts)).rejects.toMatchObject({ code: 'confirm_invalid' })
-    })
-
-    it('token for a different principal is rejected', async () => {
-      const def = mk({ tier: 'destructive' })
-      const confirm_token = await getToken(def, { guild_id: G }, stdio)
-      await expect(runTool(deps, def, { guild_id: G, confirm_token }, admin, opts)).rejects.toMatchObject({ code: 'confirm_invalid' })
-    })
-
-    it('expired token -> confirm_invalid', async () => {
-      const def = mk({ tier: 'destructive' })
-      const confirm_token = await getToken(def, { guild_id: G })
+      const t1 = await getToken(def, { guild_id: G, channel_id: C })
+      await expect(runTool(deps, def, { guild_id: G, channel_id: D, confirm_token: t1 }, admin, opts)).rejects.toMatchObject({ code: 'confirm_invalid' })
+      const t2 = await getToken(def, { guild_id: G }, stdio)
+      await expect(runTool(deps, def, { guild_id: G, confirm_token: t2 }, admin, opts)).rejects.toMatchObject({ code: 'confirm_invalid' })
+      const t3 = await getToken(def, { guild_id: G })
       clock += 300_001
-      await expect(runTool(deps, def, { guild_id: G, confirm_token }, admin, opts)).rejects.toMatchObject({ code: 'confirm_invalid' })
+      await expect(runTool(deps, def, { guild_id: G, confirm_token: t3 }, admin, opts)).rejects.toMatchObject({ code: 'confirm_invalid' })
     })
 
-    it('elicitation accept runs handler without token', async () => {
-      const handler = vi.fn(async () => ({ data: 'ok' }))
-      const elicit = vi.fn(async () => 'accept' as const)
-      const def = mk({ tier: 'destructive', handler })
-      await expect(runTool(deps, def, { guild_id: G }, admin, { ...opts, elicit })).resolves.toEqual({ data: 'ok' })
-      expect(elicit).toHaveBeenCalledWith('delete it')
-      expect(handler).toHaveBeenCalledTimes(1)
-    })
-
-    it('elicitation decline -> confirm_invalid', async () => {
-      const handler = vi.fn()
-      const def = mk({ tier: 'destructive', handler })
-      await expect(runTool(deps, def, { guild_id: G }, admin, { ...opts, elicit: async () => 'decline' })).rejects.toMatchObject({
-        code: 'confirm_invalid',
-        message: 'declined by user',
+    it('unsupported or decline falls back to token flow only for unsupported', async () => {
+      const def = mk({ tier: 'destructive' })
+      await expect(runTool(deps, def, { guild_id: G }, admin, { ...opts, elicit: async () => 'unsupported' })).rejects.toMatchObject({
+        code: 'confirm_required',
+        details: { confirm_token: expect.any(String) },
       })
-      expect(handler).not.toHaveBeenCalled()
-    })
-
-    it('elicitation unsupported falls through to token flow', async () => {
-      const def = mk({ tier: 'destructive' })
-      await expect(runTool(deps, def, { guild_id: G }, admin, { ...opts, elicit: async () => 'unsupported' })).rejects.toMatchObject({ code: 'confirm_required' })
-    })
-
-    it('preauthorized skips confirmation', async () => {
-      const handler = vi.fn(async () => ({ data: 'ok' }))
-      const def = mk({ tier: 'destructive', handler })
-      await expect(runTool(deps, def, { guild_id: G }, admin, { ...opts, preauthorized: true })).resolves.toEqual({ data: 'ok' })
-      expect(handler).toHaveBeenCalledTimes(1)
-    })
-
-    it('preauthorized still enforces tier', async () => {
-      const def = mk({ tier: 'destructive' })
-      await expect(runTool(deps, def, { guild_id: H }, admin, { ...opts, preauthorized: true })).rejects.toMatchObject({ code: 'tier_exceeded' })
+      await expect(runTool(deps, def, { guild_id: G }, admin, { ...opts, elicit: async () => 'decline' })).rejects.toMatchObject({
+        code: 'confirm_required',
+        details: { confirm_token: expect.any(String) },
+      })
     })
   })
 
@@ -247,6 +295,13 @@ describe('runTool', () => {
       expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ correlation_id: 'corr-1' }), expect.any(String))
       expect(audits()[0]).toMatchObject({ outcome: 'error', errorCode: 'internal' })
     })
+  })
+
+  it('audit write failure does not turn a successful action into an error', async () => {
+    deps.audit = { write: () => { throw new Error('disk full') } }
+    const def = mk({ tier: 'write' })
+    await expect(runTool(deps, def, { guild_id: G }, admin, opts)).resolves.toEqual({ data: 'done' })
+    expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ correlation_id: 'corr-1' }), 'audit write failed')
   })
 
   it('writes exactly one audit row per call with actor, hash and latency', async () => {

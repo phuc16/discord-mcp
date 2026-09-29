@@ -11,6 +11,7 @@ export interface PipelineDeps {
   confirm: ConfirmService
   audit: AuditWriter
   limiter: BulkLimiter
+  allowTokenConfirm?: boolean
   now?: () => number
 }
 
@@ -26,6 +27,16 @@ export interface RunOptions {
 const BULK_TOOLS: ReadonlySet<string> = new Set(['messages_purge', 'roles_bulk_assign', 'mod_bulk_ban', 'guild_prune'])
 const DENIED_CODES: ReadonlySet<ErrorCode> = new Set(['guild_not_allowed', 'tier_exceeded', 'unauthorized', 'confirm_invalid'])
 const CONFIRM_TTL_SEC = 300
+const PROMPT_MAX = 1500
+
+export const sanitizeForPrompt = (text: string): string => {
+  const cleaned = text
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202e\u2066-\u2069]/g, ' ')
+    .replace(/[`*~|>#\[\]<>@\\]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return cleaned.length > PROMPT_MAX ? `${cleaned.slice(0, PROMPT_MAX)}…` : cleaned
+}
 
 export const runTool = async (
   deps: PipelineDeps,
@@ -41,19 +52,23 @@ export const runTool = async (
   let dryRun = false
 
   const record = (outcome: 'ok' | 'dry_run' | 'denied' | 'error', errorCode: string | null): void => {
-    deps.audit.write({
-      at: new Date(now()).toISOString(),
-      correlationId: opts.correlationId,
-      tool: def.name,
-      tier: def.tier,
-      guildId,
-      actor: principal.userName,
-      actorUserId: principal.userId,
-      inputHash: hashInput(inputForHash),
-      outcome,
-      errorCode,
-      latencyMs: now() - started,
-    })
+    try {
+      deps.audit.write({
+        at: new Date(now()).toISOString(),
+        correlationId: opts.correlationId,
+        tool: def.name,
+        tier: def.tier,
+        guildId,
+        actor: principal.userName,
+        actorUserId: principal.userId,
+        inputHash: hashInput(inputForHash),
+        outcome,
+        errorCode,
+        latencyMs: now() - started,
+      })
+    } catch (e) {
+      opts.logger.error({ correlation_id: opts.correlationId, tool: def.name, err: e instanceof Error ? e.message : String(e) }, 'audit write failed')
+    }
   }
 
   try {
@@ -74,14 +89,10 @@ export const runTool = async (
       if (def.tier !== 'read') throw new McpToolError('guild_not_allowed', 'guild_id is required')
     } else {
       if (!deps.policy.guildAllowed(guildId)) throw new McpToolError('guild_not_allowed', 'guild not allowed')
-      const effective = deps.policy.effectiveTier(principal, guildId, def.group)
+      const effective = deps.policy.effectiveTier(principal, guildId, def.group, def.name)
       if (effective === null) throw new McpToolError('guild_not_allowed', 'guild not accessible')
       if (tierRank[def.tier] > tierRank[effective]) {
         throw new McpToolError('tier_exceeded', 'tier exceeded', { required: def.tier, effective })
-      }
-      if (BULK_TOOLS.has(def.name)) {
-        const taken = deps.limiter.take(guildId)
-        if (!taken.ok) throw new McpToolError('rate_limited', 'bulk rate limit exceeded', { retry_after: taken.retryAfterSec })
       }
     }
 
@@ -99,6 +110,10 @@ export const runTool = async (
     }
 
     const execute = async (): Promise<ToolResult> => {
+      if (guildId !== null && BULK_TOOLS.has(def.name)) {
+        const taken = deps.limiter.take(guildId)
+        if (!taken.ok) throw new McpToolError('rate_limited', 'bulk rate limit exceeded', { retry_after: taken.retryAfterSec })
+      }
       try {
         return await def.handler(ctx, input)
       } catch (e) {
@@ -109,27 +124,33 @@ export const runTool = async (
     }
 
     if (def.tier === 'destructive' && !opts.preauthorized) {
-      if (confirmToken !== undefined) {
+      const tokenFlow = deps.allowTokenConfirm === true
+      const issueToken = async (): Promise<never> => {
+        const preview = await runPreview()
+        if (!tokenFlow) throw new McpToolError('confirm_required', 'confirmation required: this client must support MCP elicitation', { preview })
+        const { token } = deps.confirm.issue(def.name, input, principal)
+        dryRun = true
+        throw new McpToolError('confirm_required', 'confirmation required', {
+          preview,
+          confirm_token: token,
+          expires_in_sec: CONFIRM_TTL_SEC,
+        })
+      }
+      if (tokenFlow && confirmToken !== undefined) {
         const verdict = deps.confirm.verify(def.name, input, principal, confirmToken)
         if (verdict !== 'ok') throw new McpToolError('confirm_invalid', `confirm token ${verdict}`)
       } else {
-        let proceed = false
+        let answer: 'accept' | 'decline' | 'unsupported' = 'unsupported'
         if (opts.elicit) {
           const preview = await runPreview()
-          const answer = await opts.elicit(preview.summary)
-          if (answer === 'decline') throw new McpToolError('confirm_invalid', 'declined by user')
-          proceed = answer === 'accept'
+          try {
+            answer = await opts.elicit(sanitizeForPrompt(preview.summary))
+          } catch (e) {
+            opts.logger.warn({ correlation_id: opts.correlationId, tool: def.name, err: e instanceof Error ? e.message : String(e) }, 'elicitation failed')
+          }
         }
-        if (!proceed) {
-          const preview = await runPreview()
-          const { token } = deps.confirm.issue(def.name, input, principal)
-          dryRun = true
-          throw new McpToolError('confirm_required', 'confirmation required', {
-            preview,
-            confirm_token: token,
-            expires_in_sec: CONFIRM_TTL_SEC,
-          })
-        }
+        if (answer === 'decline' && !tokenFlow) throw new McpToolError('confirm_invalid', 'declined by user')
+        if (answer !== 'accept') await issueToken()
       }
     }
 

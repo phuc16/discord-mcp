@@ -9,3 +9,11 @@ export type { BulkLimiter } from './limiter.js'
 export { runTool } from './pipeline.js'
 export type { PipelineDeps, RunOptions } from './pipeline.js'
 export type { Store } from '../store/index.js'
+export {
+  assertCanActOnMember,
+  assertCanActOnRole,
+  assertCanGrantPermissions,
+  assertCanPlaceRole,
+  callerHighestPosition,
+} from './escalation.js'
+export type { HierarchyContext } from './escalation.js'

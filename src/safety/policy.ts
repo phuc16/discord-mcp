@@ -31,7 +31,7 @@ export class PolicyEngine implements PolicyView {
     return this.denied.has(name)
   }
 
-  effectiveTier(principal: Principal, guildId: string, group: string): Tier | null {
+  effectiveTier(principal: Principal, guildId: string, group: string, tool?: string): Tier | null {
     const cap = this.maxTier(guildId)
     if (cap === null) return null
     if (principal.kind !== 'user') return cap
@@ -39,7 +39,7 @@ export class PolicyEngine implements PolicyView {
     if (raw === undefined) return null
     const bits = parseBits(raw)
     if (bits === null) return null
-    return minTier(cap, tierFromDiscordPermissions(bits, group))
+    return minTier(cap, tierFromDiscordPermissions(bits, group, tool))
   }
 
   canRead(principal: Principal, guildId: string): boolean {

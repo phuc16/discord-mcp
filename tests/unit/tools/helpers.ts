@@ -50,3 +50,22 @@ export const makeCtx = (
     calls,
   }
 }
+
+import type { AnyToolDef } from '../../../src/contracts/index.js'
+
+export const byName = (tools: AnyToolDef[], name: string): AnyToolDef => {
+  const t = tools.find((x) => x.name === name)
+  if (!t) throw new Error(`tool not found: ${name}`)
+  return t
+}
+
+export const run = async (tool: AnyToolDef, ctx: ToolContext, raw: Record<string, unknown>): Promise<unknown> => {
+  const input = tool.input.parse(raw)
+  return (await tool.handler(ctx, input)).data
+}
+
+export const runPreview = async (tool: AnyToolDef, ctx: ToolContext, raw: Record<string, unknown>) => {
+  const input = tool.input.parse(raw)
+  if (!tool.preview) throw new Error(`no preview: ${tool.name}`)
+  return tool.preview(ctx, input)
+}

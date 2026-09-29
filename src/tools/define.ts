@@ -60,3 +60,6 @@ export const assertInviteInGuild = async (ctx: ToolContext, code: string, gid: s
 
 export const defined = (o: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined))
+
+export const reasonWith = (ctx: ToolContext, reason?: string): string =>
+  reason ? `${auditReason(ctx)}: ${reason}` : auditReason(ctx)

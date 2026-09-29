@@ -196,7 +196,7 @@ describe('runTool', () => {
     it('sanitizes untrusted text in the elicitation prompt', async () => {
       const def = mk({ tier: 'destructive' })
       def.preview = async () => ({ summary: `delete **@everyone**\n<@123> \u202e${'x'.repeat(3000)}`, affected: {} })
-      const elicit = vi.fn(async (_m: string) => 'accept' as const)
+      const elicit = vi.fn<(m: string) => Promise<'accept'>>(async () => 'accept')
       await runTool(deps, def, input, admin, { ...opts, elicit })
       const shown = elicit.mock.calls[0]![0] as string
       expect(shown).not.toMatch(/[*@<>\n\u202e]/)

@@ -102,7 +102,12 @@ export const buildRuntime = (input: RuntimeInput, opts: { http: boolean }): Runt
       discordOAuth,
       discord,
       policy,
-      config: { publicBaseUrl, discordClientId: env.DISCORD_CLIENT_ID ?? '' },
+      config: {
+        publicBaseUrl,
+        discordClientId: env.DISCORD_CLIENT_ID ?? '',
+        allowedRedirectUris: config.http.allowed_redirect_uris,
+        maxClients: config.http.max_clients,
+      },
       beforeIssue: (session) => refresher.refreshSession(session),
     })
     http = {

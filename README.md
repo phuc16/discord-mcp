@@ -131,7 +131,7 @@ database_path: ./discord-mcp.db
 | `events.max_buffer` | Maximum buffered events; the oldest are dropped first. Default 50000. |
 | `http.host`, `http.port` | Bind address for `--http`. Defaults `127.0.0.1` and `8787`. Set `host: 0.0.0.0` explicitly only when the server runs in a container or behind a reverse proxy that reaches it over the network. |
 | `http.trust_proxy` | Whether to believe `X-Forwarded-For` for client IPs (rate limits and logs). `false` (default), `true`, a number of proxy hops (`1` for one reverse proxy) or a CIDR list string. Leave `false` unless a reverse proxy you control sets the header; otherwise clients can spoof their IP and dodge per-IP limits. |
-| `http.allowed_redirect_uris` | Exact redirect URIs OAuth clients may register and use. Empty (default) allows `https` URIs and loopback `http://127.0.0.1`, `http://localhost` and `http://[::1]` on any port and path. |
+| `http.allowed_redirect_uris` | Exact redirect URIs OAuth clients may register and use. Custom-scheme clients must be listed exactly. Empty (default) allows `https` URIs and loopback `http://127.0.0.1`, `http://localhost` and `http://[::1]` on any port and path. |
 | `http.max_clients` | Cap on dynamically registered OAuth clients. Default 1000. |
 | `http.max_sessions_per_principal` | Cap on concurrent MCP sessions per logged-in user or service token, besides the global cap. Default 10. An open event stream counts as activity for the idle sweep. |
 | `safety.allow_token_confirm` | Default `false`: destructive calls require a client that supports MCP elicitation and are confirmed in-band. If the client cannot elicit, the call fails closed with `confirm_required` and no token. Set `true` to also allow the two-step `confirm_token` flow (section 8.1). |
@@ -215,6 +215,8 @@ Then run `/mcp` in Claude Code and choose **Authenticate**. The flow:
 Your permissions are re-read on token refresh and whenever a role or member event touches you. If you lose the permission, that guild is dropped from your session and any rules you own there are disabled.
 
 For scripts and CI, use a service token instead of logging in: add its hash to `http.service_tokens` and pass `--header "Authorization: Bearer <token>"` to `claude mcp add --transport http`.
+
+HTTP login shows a consent page first: `/authorize` displays the client name and its exact redirect URI, and only after you confirm (a CSRF-protected form) does it redirect to Discord. The callback state is bound to your browser by a cookie, so a reverse proxy must pass `Cookie` and `Set-Cookie` through untouched.
 
 ### 7.4 Running as a service (Docker, supervisord)
 
@@ -412,7 +414,7 @@ Tier: **R** read, **W** write, **D** destructive (dry-run preview then `confirm_
 - **Least privilege:** invite with the smallest preset you need, list only the guilds you need, and set `max_tier: read` where you only observe. Use `tools.deny` for tools you never want.
 - **Guild binding:** an allowlisted `guild_id` cannot be used against a channel, webhook or invite of another guild.
 - **OAuth:** PKCE S256 is required, redirect URIs match exactly, `state` is single use with a 10-minute TTL, refresh tokens rotate and reuse of a rotated token revokes the whole session family, and CORS on the token endpoints is limited to registered redirect origins.
-- **Dynamic client registration is open** and accepts any redirect URI, as the MCP authorization spec expects. Clients are always public (no client secret); the consent step is Discord's. If you need to restrict who can register, put registration behind network controls.
+- **Dynamic client registration is open** but limited to `https` or loopback redirect URIs (or `http.allowed_redirect_uris`) and to `http.max_clients` clients. Clients are always public (no client secret); the user confirms each client on the consent page before Discord login. If you need to restrict who can register, put registration behind network controls.
 - **Rule actions with `allow_destructive`** run without a confirm token by design once created (creating them needs the destructive tier and confirmation); they are audited under `rule:<id>`.
 - **Bulk rate limit:** the limiter takes a token before the dry-run step, so a `confirm_required` response also consumes one bulk slot.
 - **CORS preflight on `/mcp`:** `OPTIONS /mcp` returns 401 (the bearer check runs first), so browser-based cross-origin MCP clients cannot call `/mcp`.

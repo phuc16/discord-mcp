@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import express from 'express'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { createAuthProvider } from '../../../src/auth/provider.js'
+import type { AuthRateLimits } from '../../../src/auth/router.js'
 import { createAuthRouter } from '../../../src/auth/router.js'
 import { openStore } from '../../../src/store/index.js'
 
@@ -11,7 +12,7 @@ describe('auth router', () => {
   let close: () => Promise<void>
   let redirectTarget: string
 
-  beforeEach(async () => {
+  const start = async (rateLimits?: AuthRateLimits) => {
     const store = openStore(':memory:')
     const app = express()
     const server = createServer(app)
@@ -28,14 +29,17 @@ describe('auth router', () => {
       policy: { guildAllowed: () => true },
       config: { publicBaseUrl: base, discordClientId: 'dcid' },
     })
-    app.use(createAuthRouter(provider, { publicBaseUrl: base }))
+    app.use(createAuthRouter(provider, { publicBaseUrl: base, rateLimits }))
     redirectTarget = 'http://localhost:9999/cb'
     close = () =>
       new Promise<void>((r) => {
         server.close(() => r())
         server.closeAllConnections()
       })
-  })
+  }
+
+  beforeEach(() => start())
+
   afterEach(async () => {
     await close()
   })
@@ -86,5 +90,36 @@ describe('auth router', () => {
     const loc = new URL(res.headers.get('location')!)
     expect(loc.origin).toBe('https://discord.com')
     expect(loc.searchParams.get('redirect_uri')).toBe(`${base}/callback`)
+  })
+
+  describe('rate limits', () => {
+    const register = () =>
+      fetch(`${base}/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: ['http://localhost:9999/cb'], token_endpoint_auth_method: 'none' }),
+      })
+
+    it('limits /register by default', async () => {
+      const statuses: number[] = []
+      for (let i = 0; i < 25; i++) statuses.push((await register()).status)
+      expect(statuses).toContain(429)
+    })
+
+    it('rateLimits false disables the limiter', async () => {
+      await close()
+      await start({ authorize: false, token: false, register: false, revoke: false })
+      const statuses: number[] = []
+      for (let i = 0; i < 25; i++) statuses.push((await register()).status)
+      expect(statuses.every((s) => s === 201)).toBe(true)
+    })
+
+    it('rateLimits override tightens a limiter', async () => {
+      await close()
+      await start({ register: { limit: 2, windowMs: 60_000 } })
+      const statuses: number[] = []
+      for (let i = 0; i < 3; i++) statuses.push((await register()).status)
+      expect(statuses).toEqual([201, 201, 429])
+    })
   })
 })

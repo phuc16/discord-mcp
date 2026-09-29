@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EffectivePolicy, NormalizedEvent, Principal, Rule, Services } from '../../../src/contracts/index.js'
 import { metaTools } from '../../../src/tools/meta.js'
-import { G, OTHER_G, byName, id, makeCtx, principal, run } from './helpers.js'
+import { G, OTHER_G, byName, id, makeCtx, principal, run, runPreview } from './helpers.js'
 
 const t = (name: string) => byName(metaTools, name)
 const RID = 'rule-1'
@@ -64,6 +64,38 @@ describe('rules tools', () => {
     expect(await run(t('rules_create'), ctx, validRule)).toEqual(rule)
     expect(seen[0]).toMatchObject({ guild_id: G, cooldown_sec: 0, allow_destructive: false, enabled: true, conditions: [], trigger: { event: 'member_join', filter: {} } })
     expect(t('rules_create').tier).toBe('write')
+  })
+  it('rules_create refuses allow_destructive and destructive actions at write tier', async () => {
+    const ctx = makeCtx({ services: svc({ rules: { create: async () => rule } }) })
+    await expect(run(t('rules_create'), ctx, { ...validRule, allow_destructive: true })).rejects.toMatchObject({ code: 'invalid_input', message: expect.stringContaining('rules_create_destructive') })
+    const kick = { ...validRule, actions: [{ tool: 'mod_kick', input_template: { user_id: '{{user_id}}' } }] }
+    await expect(run(t('rules_create'), ctx, kick)).rejects.toMatchObject({ code: 'invalid_input', message: expect.stringContaining('mod_kick') })
+  })
+  it('rules_create refuses unknown action tools', async () => {
+    const ctx = makeCtx({ services: svc({ rules: { create: async () => rule } }) })
+    await expect(run(t('rules_create'), ctx, { ...validRule, actions: [{ tool: 'nope', input_template: {} }] })).rejects.toMatchObject({ code: 'invalid_input' })
+  })
+  it('rules_update refuses allow_destructive and destructive actions at write tier', async () => {
+    const ctx = makeCtx({ services: svc({ rules: { list: async () => [rule], update: async () => rule } }) })
+    await expect(run(t('rules_update'), ctx, { guild_id: G, rule_id: RID, allow_destructive: true })).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(run(t('rules_update'), ctx, { guild_id: G, rule_id: RID, actions: [{ tool: 'mod_ban', input_template: {} }] })).rejects.toMatchObject({ code: 'invalid_input' })
+  })
+  it('destructive variants are destructive tier with previews listing triggers and actions', async () => {
+    const kick = { ...validRule, allow_destructive: true, actions: [{ tool: 'mod_kick', input_template: { user_id: '{{user_id}}' } }] }
+    const create = t('rules_create_destructive')
+    expect(create.tier).toBe('destructive')
+    const p = await runPreview(create, makeCtx(), kick)
+    expect(p.summary).toContain('member_join')
+    expect(p.summary).toContain('mod_kick')
+    expect(p.affected).toMatchObject({ destructive_actions: 1 })
+    const created = makeCtx({ services: svc({ rules: { create: async () => rule } }) })
+    expect(await run(create, created, kick)).toEqual(rule)
+    const update = t('rules_update_destructive')
+    expect(update.tier).toBe('destructive')
+    const ctx = makeCtx({ services: svc({ rules: { list: async () => [rule], update: async () => rule } }) })
+    const up = await runPreview(update, ctx, { guild_id: G, rule_id: RID, allow_destructive: true, actions: kick.actions })
+    expect(up.summary).toContain('mod_kick')
+    expect(await run(update, ctx, { guild_id: G, rule_id: RID, allow_destructive: true })).toEqual(rule)
   })
   it('rules_create rejects bad guild and empty actions', () => {
     const s = t('rules_create').input

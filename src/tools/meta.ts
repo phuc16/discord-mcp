@@ -7,7 +7,19 @@ import {
   type AuditQuery,
   type ToolContext,
 } from '../contracts/index.js'
+import { auditLogTools } from './audit-log.js'
+import { channelsTools } from './channels.js'
 import { defineTool, defined, guildId } from './define.js'
+import { emojisTools } from './emojis.js'
+import { guildTools } from './guild.js'
+import { invitesTools } from './invites.js'
+import { membersTools } from './members.js'
+import { messagesTools } from './messages.js'
+import { moderationTools } from './moderation.js'
+import { rolesTools } from './roles.js'
+import { scheduledEventsTools } from './scheduled-events.js'
+import { threadsTools } from './threads.js'
+import { webhooksTools } from './webhooks.js'
 
 const ruleId = z.string().min(1).max(100)
 const ruleShape = RuleInputSchema.shape
@@ -19,6 +31,56 @@ const patchShape = {
   cooldown_sec: ruleShape.cooldown_sec.removeDefault().optional(),
   allow_destructive: ruleShape.allow_destructive.removeDefault().optional(),
   enabled: ruleShape.enabled.removeDefault().optional(),
+}
+
+const actionCatalog = (): AnyToolDef[] => [
+  ...guildTools,
+  ...channelsTools,
+  ...threadsTools,
+  ...rolesTools,
+  ...membersTools,
+  ...moderationTools,
+  ...messagesTools,
+  ...webhooksTools,
+  ...scheduledEventsTools,
+  ...invitesTools,
+  ...emojisTools,
+  ...auditLogTools,
+  ...metaTools,
+]
+
+const destructiveActions = (actions: readonly { tool: string }[] | undefined): string[] => {
+  const catalog = actionCatalog()
+  return (actions ?? []).flatMap((a) => {
+    const def = catalog.find((t) => t.name === a.tool)
+    if (!def) throw new McpToolError('invalid_input', `rule action references unknown tool ${a.tool}`)
+    return def.tier === 'destructive' ? [a.tool] : []
+  })
+}
+
+const refuseDestructiveAtWriteTier = (variant: string, allowDestructive: boolean | undefined, actions: readonly { tool: string }[] | undefined): void => {
+  const destructive = destructiveActions(actions)
+  if (allowDestructive === true) {
+    throw new McpToolError('invalid_input', `allow_destructive requires ${variant}, which is confirm-gated`)
+  }
+  if (destructive.length > 0) {
+    throw new McpToolError('invalid_input', `destructive actions (${destructive.join(', ')}) require ${variant}, which is confirm-gated`)
+  }
+}
+
+const describeRule = (r: { trigger?: { event: string; filter?: Record<string, unknown> } | undefined; actions?: readonly { tool: string; input_template: Record<string, unknown> }[] | undefined; allow_destructive?: boolean | undefined }): { triggers: string; actions: string[] } => ({
+  triggers: r.trigger ? `${r.trigger.event} ${JSON.stringify(r.trigger.filter ?? {})}` : 'unchanged',
+  actions: (r.actions ?? []).map((a) => `${a.tool} ${JSON.stringify(a.input_template)}`),
+})
+
+const rulePreview = (verb: string, r: Parameters<typeof describeRule>[0], guild: string) => {
+  const d = describeRule(r)
+  const destructive = destructiveActions(r.actions)
+  return {
+    summary: `${verb} automation rule in guild ${guild}: trigger ${d.triggers}; actions ${d.actions.join(' | ') || 'unchanged'}; allow_destructive=${String(r.allow_destructive ?? 'unchanged')}`,
+    affected: { rules: 1, destructive_actions: destructive.length },
+    details: { ...d, destructive_tools: destructive },
+  }
 }
 
 const assertRuleInGuild = async (ctx: ToolContext, gid: string, id: string): Promise<void> => {
@@ -81,9 +143,23 @@ export const rulesCreate = defineTool({
   name: 'rules_create',
   group: 'meta',
   tier: 'write',
-  description: 'Create an automation rule for a guild (write).',
+  description: 'Create an automation rule for a guild; allow_destructive and destructive actions are refused, use rules_create_destructive (write).',
   input: { ...ruleShape, guild_id: guildId },
   guildFrom: (i) => i.guild_id,
+  handler: async (ctx, i) => {
+    refuseDestructiveAtWriteTier('rules_create_destructive', i.allow_destructive, i.actions)
+    return { data: await ctx.services.rules.create(ctx.principal, i) }
+  },
+})
+
+export const rulesCreateDestructive = defineTool({
+  name: 'rules_create_destructive',
+  group: 'meta',
+  tier: 'destructive',
+  description: 'Create an automation rule that may run destructive actions or set allow_destructive; requires confirmation (destructive).',
+  input: { ...ruleShape, guild_id: guildId },
+  guildFrom: (i) => i.guild_id,
+  preview: async (_ctx, i) => rulePreview('Create', i, i.guild_id),
   handler: async (ctx, i) => ({ data: await ctx.services.rules.create(ctx.principal, i) }),
 })
 
@@ -101,9 +177,27 @@ export const rulesUpdate = defineTool({
   name: 'rules_update',
   group: 'meta',
   tier: 'write',
-  description: 'Update an automation rule of a guild (write).',
+  description: 'Update an automation rule of a guild; allow_destructive and destructive actions are refused, use rules_update_destructive (write).',
   input: { guild_id: guildId, rule_id: ruleId, ...patchShape },
   guildFrom: (i) => i.guild_id,
+  handler: async (ctx, { guild_id, rule_id, ...patch }) => {
+    refuseDestructiveAtWriteTier('rules_update_destructive', patch.allow_destructive, patch.actions)
+    await assertRuleInGuild(ctx, guild_id, rule_id)
+    return { data: await ctx.services.rules.update(ctx.principal, rule_id, defined(patch)) }
+  },
+})
+
+export const rulesUpdateDestructive = defineTool({
+  name: 'rules_update_destructive',
+  group: 'meta',
+  tier: 'destructive',
+  description: 'Update an automation rule to run destructive actions or set allow_destructive; requires confirmation (destructive).',
+  input: { guild_id: guildId, rule_id: ruleId, ...patchShape },
+  guildFrom: (i) => i.guild_id,
+  preview: async (ctx, { guild_id, rule_id, ...patch }) => {
+    await assertRuleInGuild(ctx, guild_id, rule_id)
+    return rulePreview(`Update rule ${rule_id}:`, patch, guild_id)
+  },
   handler: async (ctx, { guild_id, rule_id, ...patch }) => {
     await assertRuleInGuild(ctx, guild_id, rule_id)
     return { data: await ctx.services.rules.update(ctx.principal, rule_id, defined(patch)) }
@@ -180,8 +274,10 @@ export const metaTools: AnyToolDef[] = [
   serverPolicy,
   eventsPoll,
   rulesCreate,
+  rulesCreateDestructive,
   rulesList,
   rulesUpdate,
+  rulesUpdateDestructive,
   rulesDelete,
   rulesTest,
   auditQuery,

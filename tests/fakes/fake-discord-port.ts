@@ -220,6 +220,7 @@ export class FakeDiscordPort implements DiscordPort {
 
   async createThread(channelId: Snowflake, spec: Payload & { message_id?: Snowflake }): Promise<Dto> {
     const guildId = this.#guildOf(channelId)
+    if (spec.message_id !== undefined) this.#message(channelId, spec.message_id)
     return this.#addChannel(guildId, { type: 11, parent_id: channelId, ...spec })
   }
 
@@ -293,6 +294,7 @@ export class FakeDiscordPort implements DiscordPort {
 
   async removeMemberRole(guildId: Snowflake, userId: Snowflake, roleId: Snowflake): Promise<void> {
     const m = take(this.#guildMembers(guildId).get(userId), 'member', userId)
+    take(this.#guildRoles(guildId).find((r) => r.id === roleId), 'role', roleId)
     m.roles = (m.roles as string[]).filter((r) => r !== roleId)
   }
 

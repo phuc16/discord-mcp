@@ -98,10 +98,7 @@ export const buildRuntime = (input: RuntimeInput, opts: { http: boolean }): Runt
       discord,
       policy,
       config: { publicBaseUrl, discordClientId: env.DISCORD_CLIENT_ID ?? '' },
-      beforeIssue: async (session) => {
-        await refresher.refreshUser(session.userId)
-        return store.oauth.getByRefreshHash(session.refreshHash) ?? session
-      },
+      beforeIssue: (session) => refresher.refreshSession(session),
     })
     http = {
       bearer: createBearerMiddleware({ store, serviceTokens: config.http.service_tokens, publicBaseUrl }),

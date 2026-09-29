@@ -64,7 +64,7 @@ Then run `/mcp` in Claude Code and authenticate with Discord. Only guilds where 
 
 ## 9. Live events over HTTP
 
-HTTP mode is stateless: each request gets a fresh MCP server, so `resources/subscribe` notifications for `discord://guild/{guild_id}/events` are delivered over stdio only. Over HTTP, poll with the `events_poll` tool using the last seen event id.
+HTTP mode keeps one MCP session per client. Subscribe to `discord://guild/{guild_id}/events` and the server pushes `resources/updated` over the session's stream. Sessions are bound to the authenticated caller, capped in number, and expire after 30 minutes idle. If your client cannot hold a stream open, poll with the `events_poll` tool using the last seen event id.
 
 ## 10. Smoke test
 

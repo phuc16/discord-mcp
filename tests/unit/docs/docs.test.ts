@@ -25,11 +25,11 @@ describe('getting-started', () => {
   })
 })
 
-describe('http limitation', () => {
+describe('http events', () => {
   it('documents events_poll fallback', () => {
     const doc = read('docs/getting-started.md')
     expect(doc).toContain('events_poll')
-    expect(doc).toContain('stateless')
+    expect(doc).toContain('resources/updated')
   })
 })
 

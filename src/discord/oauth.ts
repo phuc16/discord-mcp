@@ -1,5 +1,7 @@
 import { type DiscordOAuthPort, McpToolError, type Snowflake } from '../contracts/index.js'
 
+const GUILD_PAGE = 200
+const TIMEOUT_MS = 10_000
 const API = 'https://discord.com/api/v10'
 const TOKEN_URL = 'https://discord.com/api/oauth2/token'
 
@@ -7,6 +9,7 @@ export const createDiscordOAuthPort = (o: {
   clientId: string
   clientSecret: string
   fetchImpl?: typeof fetch
+  timeoutMs?: number
 }): DiscordOAuthPort => {
   const doFetch = o.fetchImpl ?? fetch
 
@@ -15,7 +18,7 @@ export const createDiscordOAuthPort = (o: {
   const send = async (url: string, init: RequestInit): Promise<unknown> => {
     let res: Response
     try {
-      res = await doFetch(url, init)
+      res = await doFetch(url, { ...init, signal: AbortSignal.timeout(o.timeoutMs ?? TIMEOUT_MS) })
     } catch {
       throw unauthorized()
     }
@@ -48,8 +51,16 @@ export const createDiscordOAuthPort = (o: {
       return { id: u.id, username: u.username }
     },
     async fetchUserGuilds(accessToken) {
-      const gs = (await bearerGet('/users/@me/guilds', accessToken)) as { id: Snowflake; permissions: string }[]
-      return gs.map((g) => ({ id: g.id, permissions: g.permissions }))
+      const out: { id: Snowflake; permissions: string }[] = []
+      let after: Snowflake | undefined
+      for (;;) {
+        const query = new URLSearchParams({ limit: String(GUILD_PAGE) })
+        if (after) query.set('after', after)
+        const page = (await bearerGet(`/users/@me/guilds?${query}`, accessToken)) as { id: Snowflake; permissions: string }[]
+        out.push(...page.map((g) => ({ id: g.id, permissions: g.permissions })))
+        if (page.length < GUILD_PAGE) return out
+        after = page.at(-1)?.id
+      }
     },
   }
 }

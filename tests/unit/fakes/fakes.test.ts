@@ -29,7 +29,7 @@ describe('FakeDiscordPort guild and channels', () => {
     const d = new FakeDiscordPort()
     d.seedGuild(G1)
     const c = await d.createChannel(G1, { name: 'x', type: 0 })
-    expect(c.id).toMatch(/^\d{18}$/)
+    expect(c.id).toMatch(/^\d{17,20}$/)
     expect((await d.listChannels(G1)).some((x) => x.id === c.id)).toBe(true)
     await d.deleteChannel(c.id)
     await rejectsWith(d.getChannel(c.id), 'not_found')

@@ -1,10 +1,11 @@
 import { McpToolError } from '../../src/contracts/index.js'
 import type { DiscordPort, Dto, Payload, Snowflake } from '../../src/contracts/index.js'
 
+const DISCORD_EPOCH = 1_420_070_400_000n
 let counter = 0
 const nextId = (): string => {
   counter += 1
-  return (400000000000000000n + BigInt(counter)).toString()
+  return (((BigInt(Date.now()) - DISCORD_EPOCH) << 22n) | BigInt(counter)).toString()
 }
 
 const notFound = (what: string, id: string): McpToolError => new McpToolError('not_found', `${what} ${id} not found`)

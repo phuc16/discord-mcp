@@ -69,6 +69,12 @@ discord-mcp --http --config /absolute/path/config.yaml
 claude mcp add --transport http discord https://mcp.example.com/mcp
 ```
 
+The server binds `127.0.0.1` by default. To reach it from another machine or a container, set `http.host: 0.0.0.0`, put a TLS reverse proxy in front and set `http.trust_proxy` to the number of proxies (see the README).
+
+Destructive tools (deleting channels, bans and so on) need a client that supports MCP elicitation, which asks you to confirm in the client. Clients without it get `confirm_required` and nothing happens, unless you set `safety.allow_token_confirm: true` in `config.yaml`.
+
+Only one server process may use a database file; a second one refuses to start. A relative `database_path` is resolved against the directory of `config.yaml`.
+
 Then run `/mcp` in Claude Code and authenticate with Discord. Only guilds where you are an administrator or hold Manage Server, and where the bot is present and allowed by the config, become available. Claude Desktop and running under supervisord are covered in the README.
 
 ## 9. Live events over HTTP

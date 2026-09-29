@@ -126,3 +126,24 @@ describe('config example', () => {
     expect(() => ConfigSchema.parse(parse(read('config.example.yaml')))).not.toThrow()
   })
 })
+
+describe('round 2 documentation', () => {
+  const readme = read('README.md')
+  it.each(['trust_proxy', 'allowed_redirect_uris', 'max_clients', 'max_sessions_per_principal', 'allow_token_confirm', 'max_per_guild', 'min_cooldown_sec', '127.0.0.1', '0.0.0.0', 'elicitation', 'already in use', 'SIGHUP', '503'])(
+    'README covers %s',
+    (s) => {
+      expect(readme).toContain(s)
+    },
+  )
+  it('getting-started explains elicitation, bind address and database lock', () => {
+    const doc = read('docs/getting-started.md')
+    for (const s of ['elicitation', 'allow_token_confirm', '127.0.0.1', 'trust_proxy', 'database_path']) expect(doc).toContain(s)
+  })
+  it('config.example.yaml sets every new field', async () => {
+    const { parse } = await import('yaml')
+    const cfg = parse(read('config.example.yaml')) as Record<string, Record<string, unknown>>
+    expect(cfg.http).toMatchObject({ host: '127.0.0.1', trust_proxy: false, max_clients: 1000, max_sessions_per_principal: 10 })
+    expect(cfg.safety).toEqual({ allow_token_confirm: false })
+    expect(cfg.rules).toEqual({ max_per_guild: 50, min_cooldown_sec: 1 })
+  })
+})

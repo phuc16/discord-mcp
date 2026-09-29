@@ -105,9 +105,18 @@ events:
   retention_hours: 72
   max_buffer: 50000
 http:
-  host: 0.0.0.0
+  host: 127.0.0.1
   port: 8787
+  trust_proxy: false
+  allowed_redirect_uris: []
+  max_clients: 1000
+  max_sessions_per_principal: 10
   service_tokens: []
+safety:
+  allow_token_confirm: false
+rules:
+  max_per_guild: 50
+  min_cooldown_sec: 1
 message_content_intent: false
 database_path: ./discord-mcp.db
 ```
@@ -120,10 +129,17 @@ database_path: ./discord-mcp.db
 | `rate_limits.bulk_per_minute` | Per-guild token bucket for the bulk tools `messages_purge`, `roles_bulk_assign`, `mod_bulk_ban` and `guild_prune`. Default 5. |
 | `events.retention_hours` | Buffered gateway events older than this are pruned. Default 72. |
 | `events.max_buffer` | Maximum buffered events; the oldest are dropped first. Default 50000. |
-| `http.host`, `http.port` | Bind address for `--http`. Defaults `0.0.0.0` and `8787`. |
+| `http.host`, `http.port` | Bind address for `--http`. Defaults `127.0.0.1` and `8787`. Set `host: 0.0.0.0` explicitly only when the server runs in a container or behind a reverse proxy that reaches it over the network. |
+| `http.trust_proxy` | Whether to believe `X-Forwarded-For` for client IPs (rate limits and logs). `false` (default), `true`, a number of proxy hops (`1` for one reverse proxy) or a CIDR list string. Leave `false` unless a reverse proxy you control sets the header; otherwise clients can spoof their IP and dodge per-IP limits. |
+| `http.allowed_redirect_uris` | Exact redirect URIs OAuth clients may register and use. Empty (default) allows `https` URIs and loopback `http://127.0.0.1`, `http://localhost` and `http://[::1]` on any port and path. |
+| `http.max_clients` | Cap on dynamically registered OAuth clients. Default 1000. |
+| `http.max_sessions_per_principal` | Cap on concurrent MCP sessions per logged-in user or service token, besides the global cap. Default 10. An open event stream counts as activity for the idle sweep. |
+| `safety.allow_token_confirm` | Default `false`: destructive calls require a client that supports MCP elicitation and are confirmed in-band. If the client cannot elicit, the call fails closed with `confirm_required` and no token. Set `true` to also allow the two-step `confirm_token` flow (section 8.1). |
+| `rules.max_per_guild` | Maximum automation rules per guild. Default 50. |
+| `rules.min_cooldown_sec` | Minimum `cooldown_sec` a rule may have. Default 1. |
 | `http.service_tokens` | Static bearer tokens for automation, as `{ name, sha256 }` where `sha256` is the hex SHA-256 of the token. A service token is governed only by the config policy (like stdio). Create one with `printf '%s' "$TOKEN" \| shasum -a 256`. |
 | `message_content_intent` | Set `true` only after enabling Message Content Intent in the portal. Without it, message events omit `content`. |
-| `database_path` | SQLite file for audit, confirmations, events, rules and OAuth state. Use a persistent path when running as a service. |
+| `database_path` | SQLite file for audit, confirmations, events, rules and OAuth state. Use a persistent path when running as a service. A relative path is resolved against the directory of the config file, not the working directory. Only one process may use a database: a second instance on the same file refuses to start (lock file `<database_path>.lock`; a stale lock from a crashed process is taken over). |
 
 Ensure the guild ids are the ones you invited the bot to (right-click the server in Discord with Developer Mode on and choose **Copy Server ID**).
 
@@ -179,7 +195,7 @@ Run the server as a long-lived service:
 discord-mcp --http --config config.yaml
 ```
 
-Endpoints: `POST/GET/DELETE /mcp` (streamable HTTP), `GET /healthz` (`{"status":"ok","gateway":"ready","db":"ok"}`), the OAuth endpoints (`/authorize`, `/token`, `/register`, `/revoke`, `/callback`) and the two `.well-known` metadata documents.
+Endpoints: `POST/GET/DELETE /mcp` (streamable HTTP), `GET /healthz` (`{"status":"ok","gateway":"ready","db":"ok"}`, or HTTP 503 with `"status":"degraded"` when the gateway is not ready or the database fails), the OAuth endpoints (`/authorize`, `/token`, `/register`, `/revoke`, `/callback`) and the two `.well-known` metadata documents.
 
 `PUBLIC_BASE_URL` must be the URL clients use to reach the server (put TLS in front of it in production, for example a reverse proxy), and `<PUBLIC_BASE_URL>/callback` must be registered as a redirect in the Discord portal.
 
@@ -214,13 +230,15 @@ stdout_logfile=/var/log/discord-mcp.out.log
 stderr_logfile=/var/log/discord-mcp.err.log
 ```
 
+The default bind is `127.0.0.1`, which is unreachable from outside the container. Set `http.host: 0.0.0.0` in the config, put a TLS reverse proxy in front, and set `http.trust_proxy: 1` (the number of proxies) so client IPs come from `X-Forwarded-For`; without a proxy, keep `trust_proxy: false`.
+
 Provide `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `PUBLIC_BASE_URL` through the container environment or a `.env` file in `directory`, and keep `database_path` on a mounted volume so audit, rules and sessions survive restarts. After changing config or deploying a new build, restart it:
 
 ```bash
 docker exec all-in-one supervisorctl restart discord-mcp
 ```
 
-SIGINT and SIGTERM close the gateway, the HTTP server and the database cleanly, and `/healthz` can be used as the container health check.
+SIGINT, SIGTERM and SIGHUP close the gateway, the HTTP server and the database cleanly, and `/healthz` can be used as the container health check.
 
 ## 8. Using the tools
 
@@ -244,7 +262,9 @@ Ask in plain language; the client picks the tools. Examples by group:
 
 ### 8.1 Destructive confirmation
 
-Destructive tools never act on the first call. Asking "delete the #old-news channel" produces a `channels_delete` call that returns an error result like:
+Destructive tools never act on the first call. By default they need a client that supports MCP elicitation: the client asks you to confirm the preview in-band, and the call runs only if you accept. If the client cannot elicit (or elicitation fails), the call fails closed with `confirm_required` and no token, and nothing changes. To allow the token flow below for such clients, set `safety.allow_token_confirm: true`; with it off, a declined confirmation is simply denied.
+
+With `safety.allow_token_confirm: true`, asking "delete the #old-news channel" produces a `channels_delete` call that returns an error result like:
 
 ```json
 {
@@ -265,7 +285,7 @@ The client shows you the preview. If you agree, it repeats the same call with `c
 - Replaying a used token returns `confirm_invalid`.
 - Changing any argument, using another caller, or waiting past 5 minutes returns `confirm_invalid`.
 - A `confirm_required` response is a dry run: nothing was changed, and the audit log records it with outcome `dry_run`.
-- Clients that support MCP elicitation are asked to confirm in-band instead of receiving a token; declining returns `confirm_invalid`.
+- Clients that support MCP elicitation are always asked to confirm in-band first; the token is only returned when elicitation is unavailable or declined.
 - Caps: `messages_purge` removes at most 1000 messages per call; `roles_bulk_assign` and `mod_bulk_ban` at most 200 targets per call.
 
 ### 8.2 Audit trail
@@ -283,7 +303,7 @@ The bot buffers gateway events per allowlisted guild: `message_create`, `message
 
 ### 9.2 Rules
 
-A rule reacts to an event and runs tools. Ask Claude to create it with `rules_create`, or give the arguments directly. Placeholders `{{event.data.<key>}}` and `{{event.guild_id}}` in `input_template` are filled from the event; a missing key fails the action.
+A rule reacts to an event and runs tools. Ask Claude to create it with `rules_create`, or give the arguments directly. Placeholders `{{event.data.<key>}}` and `{{event.guild_id}}` in `input_template` are filled from the event; a missing key fails the action. Rules with `allow_destructive: true` or destructive actions cannot be created with `rules_create`/`rules_update`; use `rules_create_destructive`/`rules_update_destructive`, which go through the destructive confirmation (8.1).
 
 Welcome role on join:
 
@@ -349,7 +369,7 @@ Tier: **R** read, **W** write, **D** destructive (dry-run preview then `confirm_
 | invites | `invites_list` R, `invites_create` W, `invites_delete` D |
 | emojis | `emojis_list` R, `emojis_create` W, `emojis_update` W, `emojis_delete` D, `stickers_list` R, `stickers_create` W, `stickers_delete` D |
 | audit_log | `audit_log_list` R, `audit_log_by_user` R, `audit_log_by_action` R |
-| meta | `server_whoami` R*, `server_policy` R*, `events_poll` R, `rules_create` W, `rules_list` R, `rules_update` W, `rules_delete` W, `rules_test` R, `audit_query` R |
+| meta | `server_whoami` R*, `server_policy` R*, `events_poll` R, `rules_create` W, `rules_list` R, `rules_update` W, `rules_create_destructive` D, `rules_update_destructive` D, `rules_delete` W, `rules_test` R, `audit_query` R |
 
 `server_policy` shows your effective tier per guild and the denied tools. Tools that act through a channel, webhook or invite id check that the resource belongs to the given `guild_id` before acting.
 
@@ -360,7 +380,7 @@ Tier: **R** read, **W** write, **D** destructive (dry-run preview then `confirm_
 - **Guild binding:** an allowlisted `guild_id` cannot be used against a channel, webhook or invite of another guild.
 - **OAuth:** PKCE S256 is required, redirect URIs match exactly, `state` is single use with a 10-minute TTL, refresh tokens rotate and reuse of a rotated token revokes the whole session family, and CORS on the token endpoints is limited to registered redirect origins.
 - **Dynamic client registration is open** and accepts any redirect URI, as the MCP authorization spec expects. Clients are always public (no client secret); the consent step is Discord's. If you need to restrict who can register, put registration behind network controls.
-- **Rule actions with `allow_destructive`** run without a confirm token by design; they are audited under `rule:<id>`.
+- **Rule actions with `allow_destructive`** run without a confirm token by design once created (creating them needs the destructive tier and confirmation); they are audited under `rule:<id>`.
 - **Bulk rate limit:** the limiter takes a token before the dry-run step, so a `confirm_required` response also consumes one bulk slot.
 - **CORS preflight on `/mcp`:** `OPTIONS /mcp` returns 401 (the bearer check runs first), so browser-based cross-origin MCP clients cannot call `/mcp`.
 - **Message content:** without the Message Content intent, `message_contains` conditions never match and events carry no text.
@@ -378,12 +398,13 @@ Tier: **R** read, **W** write, **D** destructive (dry-run preview then `confirm_
 | Role or member edits fail with `missing_permissions` | Role hierarchy: move the bot's role above the roles and members it must manage. The bot can never edit the owner. |
 | `guild_not_allowed` | The guild is not in `config.yaml`, or (HTTP) you are not an administrator or Manage Server holder there, or the bot is not present. |
 | `tier_exceeded` | The tool's tier is above the effective tier: raise `max_tier`, or your Discord permissions cap you. `server_policy` shows the effective tier per guild. The tool may also be in `tools.deny`. |
-| `confirm_required` on every destructive call | Expected: repeat the call with the returned `confirm_token`. `confirm_invalid` means it was used, expired, or the input changed. |
+| `confirm_required` on every destructive call | Your client does not support MCP elicitation. Use one that does, or set `safety.allow_token_confirm: true` and repeat the call with the returned `confirm_token`. `confirm_invalid` means the token was used, expired, or the input changed. |
 | `rate_limited` | Bulk limiter (`rate_limits.bulk_per_minute`, wait `details.retry_after`) or Discord's own limit (429; the details carry `retry_after` seconds). The OAuth endpoints also rate limit a single IP, returning HTTP 429. |
 | `not_found` | Wrong id, or the resource belongs to another guild than `guild_id`. |
 | HTTP 401 with `WWW-Authenticate` | Not logged in or the token expired or was revoked: re-authenticate with `/mcp`. |
 | Login ends with `access_denied` | None of your guilds qualify (Administrator or Manage Server, bot present, allowlisted). |
 | `redirect_uri` mismatch at Discord | `<PUBLIC_BASE_URL>/callback` must be registered exactly in the portal. |
+| `database ... is already in use` at startup | Another discord-mcp process is using that database. Stop it, or use a different `database_path`. |
 | No events arrive | Check `/healthz` for `gateway: ready`, that the guild is in `config.yaml`, and the intents. A `gap` event marks a reconnect. |
 
 ## 13. Development

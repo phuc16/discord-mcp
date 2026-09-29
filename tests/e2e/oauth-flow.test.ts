@@ -605,6 +605,39 @@ describe('permission changes', () => {
     await mcp.close()
   })
 
+  it('demoting a rule owner disables the rule and audits it', async () => {
+    const s = await fullLogin(codeFor('multi'))
+    const mcp = await mcpClient(s.tokens.access_token)
+    const role = await discord.createRole(GUILD_A, { name: 'auto' })
+    const created = toolJson(
+      await mcp.callTool({
+        name: 'rules_create',
+        arguments: {
+          guild_id: GUILD_A,
+          trigger: { event: 'member_join', filter: {} },
+          actions: [{ tool: 'roles_assign', input_template: { user_id: '{{event.data.user_id}}', role_id: role.id } }],
+        },
+      }),
+    )
+    expect(created.isError).toBe(false)
+    const ruleId = created.body.id as string
+    expect(store.rules.get(ruleId)).toMatchObject({ enabled: true, owner_user_id: '9005' })
+
+    discord.memberPermissions.set(`${GUILD_A}:9005`, '0')
+    gateway.emit({ guildId: GUILD_A, type: 'role_update', at: new Date().toISOString(), data: { role_id: role.id } })
+    await expect.poll(() => store.rules.get(ruleId)?.enabled, { timeout: 3000 }).toBe(false)
+    expect(store.rules.get(ruleId)?.disabled_reason).toMatch(/lost management permissions/)
+    const rows = store.audit.query({ tool: 'rules_auto_disable', limit: 10 })
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ outcome: 'denied', guildId: GUILD_A })
+
+    discord.calls.length = 0
+    gateway.emit({ guildId: GUILD_A, type: 'member_join', at: new Date().toISOString(), data: { user_id: '9999' } })
+    await runtime.rules.idle()
+    expect(discord.calls.filter((c) => c.method === 'addMemberRole')).toEqual([])
+    await mcp.close()
+  })
+
   it('a demotion that removes every guild revokes the session', async () => {
     const s = await fullLogin(codeFor('solo'))
     expect((await initialize(s.tokens.access_token)).status).toBe(200)

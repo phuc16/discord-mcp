@@ -53,10 +53,10 @@ describe('channels_update', () => {
 
 describe('channels_move', () => {
   it('forwards positions and caps at 50', async () => {
-    const ctx = makeCtx({ discord: { moveChannels: async () => undefined } })
+    const ctx = makeCtx({ discord: { listChannels: async () => [own], moveChannels: async () => undefined } })
     const positions = [{ id: C, position: 1, parent_id: null }]
     await run(t('channels_move'), ctx, { guild_id: G, positions })
-    expect(ctx.calls[0]).toEqual({ method: 'moveChannels', args: [G, positions] })
+    expect(ctx.calls[1]).toEqual({ method: 'moveChannels', args: [G, positions] })
     const many = Array.from({ length: 51 }, () => ({ id: C, position: 0 }))
     expect(t('channels_move').input.safeParse({ guild_id: G, positions: many }).success).toBe(false)
   })
@@ -127,5 +127,33 @@ describe('channels_clone', () => {
   it('rejects foreign channel', async () => {
     const ctx = makeCtx({ discord: { getChannel: async () => foreign, createChannel: async () => own } })
     await expect(run(t('channels_clone'), ctx, { guild_id: G, channel_id: C })).rejects.toMatchObject({ code: 'not_found' })
+  })
+})
+
+describe('channels parent_id and move references', () => {
+  const P = id('4')
+  const parentForeign = { getChannel: async () => ({ id: P, guild_id: OTHER_G }), createChannel: async () => own, updateChannel: async () => own, moveChannels: async () => undefined }
+  it('channels_create rejects parent_id from another guild', async () => {
+    const ctx = makeCtx({ discord: parentForeign })
+    await expect(run(t('channels_create'), ctx, { guild_id: G, name: 'n', type: 0, parent_id: P })).rejects.toMatchObject({ code: 'not_found' })
+    expect(ctx.calls.map((c) => c.method)).toEqual(['getChannel'])
+  })
+  it('channels_update rejects parent_id from another guild', async () => {
+    const ctx = makeCtx({
+      discord: { ...parentForeign, getChannel: async (cid) => (cid === C ? own : { id: P, guild_id: OTHER_G }) },
+    })
+    await expect(run(t('channels_update'), ctx, { guild_id: G, channel_id: C, parent_id: P })).rejects.toMatchObject({ code: 'not_found' })
+    expect(ctx.calls.map((c) => c.method)).not.toContain('updateChannel')
+  })
+  it('channels_update allows clearing parent_id', async () => {
+    const ctx = makeCtx({ discord: { getChannel: async () => own, updateChannel: async () => own } })
+    await run(t('channels_update'), ctx, { guild_id: G, channel_id: C, parent_id: null })
+    expect(ctx.calls[1]?.args[1]).toEqual({ parent_id: null })
+  })
+  it('channels_move rejects ids and parents outside the guild', async () => {
+    const ctx = makeCtx({ discord: { listChannels: async () => [own], moveChannels: async () => undefined } })
+    await expect(run(t('channels_move'), ctx, { guild_id: G, positions: [{ id: id('8'), position: 1 }] })).rejects.toMatchObject({ code: 'not_found' })
+    await expect(run(t('channels_move'), ctx, { guild_id: G, positions: [{ id: C, position: 1, parent_id: id('8') }] })).rejects.toMatchObject({ code: 'not_found' })
+    expect(ctx.calls.map((c) => c.method)).not.toContain('moveChannels')
   })
 })

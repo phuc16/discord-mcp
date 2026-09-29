@@ -63,3 +63,15 @@ export const defined = (o: Record<string, unknown>): Record<string, unknown> =>
 
 export const reasonWith = (ctx: ToolContext, reason?: string): string =>
   reason ? `${auditReason(ctx)}: ${reason}` : auditReason(ctx)
+
+export const assertOptionalChannelInGuild = async (
+  ctx: ToolContext,
+  channelId: string | null | undefined,
+  gid: string,
+): Promise<void> => {
+  if (channelId) await assertChannelInGuild(ctx, channelId, gid)
+}
+
+export const assertChannelsInGuild = async (ctx: ToolContext, channelIds: readonly string[], gid: string): Promise<void> => {
+  for (const channelId of new Set(channelIds)) await assertChannelInGuild(ctx, channelId, gid)
+}

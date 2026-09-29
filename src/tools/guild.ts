@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { AnyToolDef } from '../contracts/index.js'
-import { auditReason, defineTool, defined, guildId, snowflake } from './define.js'
+import { assertOptionalChannelInGuild, auditReason, defineTool, defined, guildId, snowflake } from './define.js'
 
 const days = z.number().int().min(1).max(30).describe('Days of inactivity')
 
@@ -42,9 +42,10 @@ export const guildUpdate = defineTool({
     system_channel_id: snowflake.nullable().optional(),
   },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, { guild_id, ...patch }) => ({
-    data: await ctx.discord.updateGuild(guild_id, defined(patch), auditReason(ctx)),
-  }),
+  handler: async (ctx, { guild_id, ...patch }) => {
+    await assertOptionalChannelInGuild(ctx, patch.system_channel_id, guild_id)
+    return { data: await ctx.discord.updateGuild(guild_id, defined(patch), auditReason(ctx)) }
+  },
 })
 
 export const guildGetPreview = defineTool({
@@ -101,7 +102,10 @@ export const guildUpdateWidget = defineTool({
   description: 'Update the guild widget settings (write).',
   input: { guild_id: guildId, enabled: z.boolean().optional(), channel_id: snowflake.nullable().optional() },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, { guild_id, ...patch }) => ({ data: await ctx.discord.updateWidget(guild_id, defined(patch)) }),
+  handler: async (ctx, { guild_id, ...patch }) => {
+    await assertOptionalChannelInGuild(ctx, patch.channel_id, guild_id)
+    return { data: await ctx.discord.updateWidget(guild_id, defined(patch)) }
+  },
 })
 
 export const guildTools: AnyToolDef[] = [

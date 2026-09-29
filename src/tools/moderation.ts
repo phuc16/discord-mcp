@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { McpToolError, type AnyToolDef, type ToolContext } from '../contracts/index.js'
-import { auditReason, defineTool, defined, guildId, reasonWith, snowflake } from './define.js'
+import { assertChannelsInGuild, auditReason, defineTool, defined, guildId, reasonWith, snowflake } from './define.js'
 
 const reason = z.string().min(1).max(200).optional()
 const deleteSeconds = z.number().int().min(0).max(604800).optional()
@@ -152,9 +152,10 @@ export const automodCreateRule = defineTool({
     exempt_channels: z.array(snowflake).max(50).optional(),
   },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, { guild_id, ...spec }) => ({
-    data: await ctx.discord.createAutomodRule(guild_id, defined(spec), auditReason(ctx)),
-  }),
+  handler: async (ctx, { guild_id, ...spec }) => {
+    await assertChannelsInGuild(ctx, spec.exempt_channels ?? [], guild_id)
+    return { data: await ctx.discord.createAutomodRule(guild_id, defined(spec), auditReason(ctx)) }
+  },
 })
 
 export const automodUpdateRule = defineTool({
@@ -173,9 +174,10 @@ export const automodUpdateRule = defineTool({
     exempt_channels: z.array(snowflake).max(50).optional(),
   },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, { guild_id, rule_id, ...patch }) => ({
-    data: await ctx.discord.updateAutomodRule(guild_id, rule_id, defined(patch), auditReason(ctx)),
-  }),
+  handler: async (ctx, { guild_id, rule_id, ...patch }) => {
+    await assertChannelsInGuild(ctx, patch.exempt_channels ?? [], guild_id)
+    return { data: await ctx.discord.updateAutomodRule(guild_id, rule_id, defined(patch), auditReason(ctx)) }
+  },
 })
 
 export const automodDeleteRule = defineTool({

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { EffectivePolicy, Services } from '../../../src/contracts/index.js'
 import { guildTools } from '../../../src/tools/guild.js'
-import { G, byName, makeCtx, run, runPreview } from './helpers.js'
+import { G, OTHER_G, byName, makeCtx, run, runPreview } from './helpers.js'
 
 const t = (name: string) => byName(guildTools, name)
 
@@ -53,9 +53,9 @@ describe('guild write tools', () => {
     expect(t('guild_update').input.safeParse({ guild_id: G, verification_level: 5 }).success).toBe(false)
   })
   it('guild_update_widget forwards patch', async () => {
-    const ctx = makeCtx({ discord: { updateWidget: async () => ({}) } })
+    const ctx = makeCtx({ discord: { getChannel: async () => ({ id: '2'.repeat(18), guild_id: G }), updateWidget: async () => ({}) } })
     await run(t('guild_update_widget'), ctx, { guild_id: G, enabled: true, channel_id: '2'.repeat(18) })
-    expect(ctx.calls[0]).toEqual({ method: 'updateWidget', args: [G, { enabled: true, channel_id: '2'.repeat(18) }] })
+    expect(ctx.calls[1]).toEqual({ method: 'updateWidget', args: [G, { enabled: true, channel_id: '2'.repeat(18) }] })
   })
   it('guild tools use guild_id', () => {
     expect(t('guild_get').guildFrom({ guild_id: G })).toBe(G)
@@ -74,5 +74,27 @@ describe('guild_prune', () => {
     const ctx = makeCtx({ discord: { pruneGuild: async () => ({ pruned: 3 }) } })
     expect(await run(tool(), ctx, { guild_id: G, days: 7 })).toEqual({ pruned: 3 })
     expect(ctx.calls[0]).toEqual({ method: 'pruneGuild', args: [G, 7, 'via discord-mcp by tester (corr-1)'] })
+  })
+})
+
+describe('guild channel references', () => {
+  const C = '2'.repeat(18)
+  const foreign = { getChannel: async () => ({ id: C, guild_id: OTHER_G }), updateGuild: async () => ({ id: G }), updateWidget: async () => ({}) }
+  const own = { getChannel: async () => ({ id: C, guild_id: G }), updateGuild: async () => ({ id: G }), updateWidget: async () => ({}) }
+  it('guild_update rejects system_channel_id from another guild', async () => {
+    const ctx = makeCtx({ discord: foreign })
+    await expect(run(t('guild_update'), ctx, { guild_id: G, system_channel_id: C })).rejects.toMatchObject({ code: 'not_found' })
+    expect(ctx.calls.map((c) => c.method)).toEqual(['getChannel'])
+  })
+  it('guild_update accepts own system_channel_id and null', async () => {
+    const ctx = makeCtx({ discord: own })
+    await run(t('guild_update'), ctx, { guild_id: G, system_channel_id: C })
+    await run(t('guild_update'), ctx, { guild_id: G, system_channel_id: null })
+    expect(ctx.calls.map((c) => c.method)).toEqual(['getChannel', 'updateGuild', 'updateGuild'])
+  })
+  it('guild_update_widget rejects channel_id from another guild', async () => {
+    const ctx = makeCtx({ discord: foreign })
+    await expect(run(t('guild_update_widget'), ctx, { guild_id: G, channel_id: C })).rejects.toMatchObject({ code: 'not_found' })
+    expect(ctx.calls.map((c) => c.method)).toEqual(['getChannel'])
   })
 })

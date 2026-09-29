@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import type { AnyToolDef } from '../contracts/index.js'
-import { assertChannelInGuild, auditReason, defineTool, defined, guildId, snowflake } from './define.js'
+import { McpToolError, type AnyToolDef } from '../contracts/index.js'
+import { assertChannelInGuild, assertOptionalChannelInGuild, auditReason, defineTool, defined, guildId, snowflake } from './define.js'
 
 const bits = z.string().regex(/^\d+$/, 'must be a decimal bit string')
 const channelType = z.union([z.literal(0), z.literal(2), z.literal(4), z.literal(5), z.literal(13), z.literal(15)])
@@ -40,9 +40,10 @@ export const channelsCreate = defineTool({
     position: z.number().int().min(0).optional(),
   },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, { guild_id, ...spec }) => ({
-    data: await ctx.discord.createChannel(guild_id, defined(spec), auditReason(ctx)),
-  }),
+  handler: async (ctx, { guild_id, ...spec }) => {
+    await assertOptionalChannelInGuild(ctx, spec.parent_id, guild_id)
+    return { data: await ctx.discord.createChannel(guild_id, defined(spec), auditReason(ctx)) }
+  },
 })
 
 export const channelsUpdate = defineTool({
@@ -66,6 +67,7 @@ export const channelsUpdate = defineTool({
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, { guild_id, channel_id, ...patch }) => {
     await assertChannelInGuild(ctx, channel_id, guild_id)
+    await assertOptionalChannelInGuild(ctx, patch.parent_id, guild_id)
     return { data: await ctx.discord.updateChannel(channel_id, defined(patch), auditReason(ctx)) }
   },
 })
@@ -84,6 +86,12 @@ export const channelsMove = defineTool({
   },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
+    const known = new Set((await ctx.discord.listChannels(i.guild_id)).map((c) => c.id))
+    for (const p of i.positions) {
+      for (const ref of [p.id, p.parent_id]) {
+        if (ref && !known.has(ref)) throw new McpToolError('not_found', `channel ${ref} not found in this guild`)
+      }
+    }
     await ctx.discord.moveChannels(i.guild_id, i.positions)
     return { data: { moved: i.positions.length } }
   },

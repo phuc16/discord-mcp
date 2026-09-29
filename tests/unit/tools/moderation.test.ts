@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { moderationTools } from '../../../src/tools/moderation.js'
-import { G, byName, id, makeCtx, run, runPreview } from './helpers.js'
+import { G, OTHER_G, byName, id, makeCtx, run, runPreview } from './helpers.js'
 
 const t = (name: string) => byName(moderationTools, name)
 const U = id('4')
@@ -149,5 +149,20 @@ describe('automod', () => {
     const ctx = makeCtx({ discord: { deleteAutomodRule: async () => undefined } })
     await run(t('automod_delete_rule'), ctx, { guild_id: G, rule_id: rule.id })
     expect(ctx.calls[0]).toEqual({ method: 'deleteAutomodRule', args: [G, rule.id, base] })
+  })
+})
+
+describe('automod channel references', () => {
+  const C = id('2')
+  const foreign = { getChannel: async () => ({ id: C, guild_id: OTHER_G }), createAutomodRule: async () => ({ id: C }), updateAutomodRule: async () => ({ id: C }) }
+  it('automod_create_rule rejects exempt_channels outside the guild', async () => {
+    const ctx = makeCtx({ discord: foreign })
+    await expect(run(t('automod_create_rule'), ctx, { guild_id: G, name: 'r', event_type: 1, trigger_type: 3, actions: [{ type: 1 }], exempt_channels: [C] })).rejects.toMatchObject({ code: 'not_found' })
+    expect(ctx.calls.map((c) => c.method)).toEqual(['getChannel'])
+  })
+  it('automod_update_rule rejects exempt_channels outside the guild', async () => {
+    const ctx = makeCtx({ discord: foreign })
+    await expect(run(t('automod_update_rule'), ctx, { guild_id: G, rule_id: id('6'), exempt_channels: [C] })).rejects.toMatchObject({ code: 'not_found' })
+    expect(ctx.calls.map((c) => c.method)).toEqual(['getChannel'])
   })
 })

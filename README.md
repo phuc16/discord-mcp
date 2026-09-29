@@ -240,6 +240,39 @@ docker exec all-in-one supervisorctl restart discord-mcp
 
 SIGINT, SIGTERM and SIGHUP close the gateway, the HTTP server and the database cleanly, and `/healthz` can be used as the container health check.
 
+### 7.5 Run with Docker
+
+The repository ships a `Dockerfile` (multi-stage, `node:22-slim`, non-root user, `NODE_ENV=production`), a `.dockerignore`, `docker-compose.yml` and `config.docker.example.yaml`. Secrets are never baked into the image: pass them as environment variables (`DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL`). `.env` is excluded from the build context.
+
+Prepare a data directory holding the config and the SQLite database:
+
+```bash
+mkdir -p data && cp config.docker.example.yaml data/config.yaml
+```
+
+The Docker example sets `http.host: 0.0.0.0` (required inside a container, since the default is `127.0.0.1`) and `database_path: /data/discord-mcp.db`. Set `http.trust_proxy` to the number of reverse proxies in front of the container (for example `1`) when you run behind one; keep `false` otherwise. The container runs as uid 1000, so `data` must be writable by it (`chown 1000 data`).
+
+Build and run:
+
+```bash
+docker build -t discord-mcp .
+docker run -d --name discord-mcp --init --restart unless-stopped \
+  --env-file .env -v "$PWD/data:/data" -p 127.0.0.1:8787:8787 discord-mcp
+```
+
+Or with compose (reads `.env`, mounts `./data`, publishes `127.0.0.1:8787` only):
+
+```bash
+docker compose up -d --build
+docker compose logs -f discord-mcp
+```
+
+Publishing on `127.0.0.1` keeps the port private; expose it through a TLS reverse proxy and set `PUBLIC_BASE_URL` to the public HTTPS URL. The image has a `HEALTHCHECK` against `/healthz` (503 while the gateway is down). A Discord login failure, such as an invalid bot token, makes the process exit with a message instead of serving.
+
+Only one container may use a given `/data` volume: a second process on the same database refuses to start. Upgrade with `git pull && docker compose up -d --build` (or rebuild and re-run); the database migrates on start and a newer database is refused by an older build. `docker stop` sends SIGTERM, which closes the gateway, the HTTP server and the database cleanly.
+
+Tested: image build, non-root user, healthcheck command semantics (200 passes, 503 fails) and SIGTERM handling. Not tested against a real Discord token.
+
 ## 8. Using the tools
 
 Ask in plain language; the client picks the tools. Examples by group:

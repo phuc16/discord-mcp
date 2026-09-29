@@ -75,7 +75,7 @@ Destructive tools (deleting channels, bans and so on) need a client that support
 
 Only one server process may use a database file; a second one refuses to start. A relative `database_path` is resolved against the directory of `config.yaml`.
 
-Then run `/mcp` in Claude Code and authenticate with Discord. Only guilds where you are an administrator or hold Manage Server, and where the bot is present and allowed by the config, become available. Claude Desktop and running under supervisord are covered in the README.
+Then run `/mcp` in Claude Code and authenticate with Discord. Only guilds where you are an administrator or hold Manage Server, and where the bot is present and allowed by the config, become available. Claude Desktop, running under supervisord and running with Docker (`Dockerfile`, `docker-compose.yml`, `config.docker.example.yaml`) are covered in the README.
 
 ## 9. Live events over HTTP
 

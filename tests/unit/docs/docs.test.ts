@@ -147,3 +147,35 @@ describe('round 2 documentation', () => {
     expect(cfg.rules).toEqual({ max_per_guild: 50, min_cooldown_sec: 1 })
   })
 })
+
+describe('docker', () => {
+  it('ships a Dockerfile that runs non-root and never copies env files', () => {
+    const df = read('Dockerfile')
+    expect(df).toMatch(/USER node/)
+    expect(df).toMatch(/HEALTHCHECK/)
+    expect(df).toMatch(/ENTRYPOINT \["node", "dist\/cli\/main.js"\]/)
+    expect(df).not.toMatch(/COPY .*\.env/)
+  })
+  it('excludes secrets and state from the build context', () => {
+    const ignore = read('.dockerignore').split('\n')
+    for (const entry of ['.env*', '*.db', 'config.yaml', 'node_modules', 'tests']) expect(ignore).toContain(entry)
+  })
+  it('compose file parses and binds loopback', async () => {
+    const { parse } = await import('yaml')
+    const c = parse(read('docker-compose.yml')) as { services: Record<string, { ports: string[]; env_file: string; volumes: string[] }> }
+    const svc = c.services['discord-mcp']!
+    expect(svc.ports).toEqual(['127.0.0.1:8787:8787'])
+    expect(svc.env_file).toBe('.env')
+    expect(svc.volumes).toContain('./data:/data')
+  })
+  it('docker config example parses and binds 0.0.0.0 with a /data database', async () => {
+    const { parse } = await import('yaml')
+    const { ConfigSchema } = await import('../../../src/contracts/index.js')
+    const cfg = ConfigSchema.parse(parse(read('config.docker.example.yaml')))
+    expect(cfg.http.host).toBe('0.0.0.0')
+    expect(cfg.database_path).toBe('/data/discord-mcp.db')
+  })
+  it('README has a Run with Docker section', () => {
+    expect(read('README.md')).toContain('Run with Docker')
+  })
+})

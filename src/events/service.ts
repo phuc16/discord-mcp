@@ -32,6 +32,7 @@ export const createEventsService = (d: {
   guildIds: string[]
   canRead: (p: Principal, guildId: string) => boolean
   now?: () => number
+  logger?: { warn(o: Record<string, unknown>, msg: string): void }
 }): EventsService => {
   const now = d.now ?? Date.now
   const guilds = new Set(d.guildIds)
@@ -55,8 +56,8 @@ export const createEventsService = (d: {
     for (const cb of [...subscribers]) {
       try {
         cb(stored)
-      } catch {
-        continue
+      } catch (err) {
+        d.logger?.warn({ error: err instanceof Error ? err.message : String(err), event_type: e.type }, 'event subscriber failed')
       }
     }
     if (++appendsSincePrune >= PRUNE_EVERY_APPENDS) prune()
@@ -99,8 +100,7 @@ export const createEventsService = (d: {
     },
 
     recent(guildId, limit) {
-      const rows = d.store.events.since({ guildId, sinceId: 0, limit: d.config.events.max_buffer })
-      return rows.slice(-Math.max(0, limit))
+      return d.store.events.recent(guildId, Math.max(0, limit))
     },
 
     async poll(principal, q) {

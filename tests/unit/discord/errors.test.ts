@@ -36,6 +36,28 @@ describe('mapDiscordError', () => {
   it('maps 429 DiscordAPIError to rate_limited', () => {
     expect(mapDiscordError(api(429, 0)).code).toBe('rate_limited')
   })
+  it('maps 401 to internal without exposing auth details and logs it', () => {
+    const logged: unknown[] = []
+    const e = mapDiscordError(api(401, 0, '401: Unauthorized'), { error: (o) => logged.push(o) })
+    expect(e.code).toBe('internal')
+    expect(e.message).not.toMatch(/401|Unauthorized/)
+    expect(logged).toHaveLength(1)
+  })
+  it('maps 5xx to internal with a service message', () => {
+    const e = mapDiscordError(api(503, 0))
+    expect(e.code).toBe('internal')
+    expect(e.message).toBe('discord service error')
+    expect(e.details.status).toBe(503)
+  })
+  it('carries retry_after from a 429 body', () => {
+    const err = new DiscordAPIError({ message: 'slow', code: 0, retry_after: 1.5 } as never, 0, 429, 'GET', 'u', {})
+    expect(mapDiscordError(err).details.retry_after).toBe(1.5)
+  })
+  it('maps bulk-ban with no bannable users to a clean error', () => {
+    const e = mapDiscordError(api(500, 500000, 'Failed to ban users'))
+    expect(e.code).toBe('invalid_input')
+    expect(e.message).toMatch(/no users could be banned/)
+  })
   it('maps unknown errors to internal without leaking', () => {
     const e = mapDiscordError(new Error('boom Bot secret-token'))
     expect(e.code).toBe('internal')

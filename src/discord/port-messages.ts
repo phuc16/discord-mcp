@@ -1,5 +1,5 @@
 import { Routes } from 'discord.js'
-import type { DiscordPort } from '../contracts/index.js'
+import { type DiscordPort, type Dto, McpToolError } from '../contracts/index.js'
 import type { Rest } from './rest.js'
 
 export type MessageMethods = Pick<
@@ -24,6 +24,14 @@ const BULK_MAX_AGE_MS = 14 * 86_400_000 - 3_600_000
 const BULK_BATCH = 100
 
 const createdAt = (snowflake: string): number => Number((BigInt(snowflake) >> 22n) + DISCORD_EPOCH)
+
+const PIN_PAGE = 50
+const MAX_PIN_PAGES = 20
+
+const assertEmoji = (emoji: string): string => {
+  if (emoji === '' || emoji === '.' || emoji === '..') throw new McpToolError('invalid_input', 'invalid emoji')
+  return encodeURIComponent(emoji)
+}
 
 const chunk = <T>(items: T[], size: number): T[][] =>
   Array.from({ length: Math.ceil(items.length / size) }, (_, i) => items.slice(i * size, (i + 1) * size))
@@ -52,19 +60,33 @@ export const messageMethods = (rest: Rest): MessageMethods => {
     },
 
     async pinMessage(c, m, reason) {
-      await rest.put(Routes.channelPin(c, m), { reason })
+      await rest.put(Routes.channelMessagesPin(c, m), { reason })
     },
     async unpinMessage(c, m, reason) {
-      await rest.delete(Routes.channelPin(c, m), { reason })
+      await rest.delete(Routes.channelMessagesPin(c, m), { reason })
     },
-    listPins: (c) => rest.get(Routes.channelPins(c)),
+    async listPins(c) {
+      const out: Dto[] = []
+      let before: string | undefined
+      for (let page = 0; page < MAX_PIN_PAGES; page++) {
+        const res = await rest.get<{ items: { pinned_at: string; message: Dto }[]; has_more: boolean }>(
+          Routes.channelMessagesPins(c),
+          { query: { limit: PIN_PAGE, before } },
+        )
+        out.push(...res.items.map((i) => i.message))
+        const last = res.items.at(-1)
+        if (!res.has_more || !last) break
+        before = last.pinned_at
+      }
+      return out
+    },
     crosspostMessage: (c, m) => rest.post(`/channels/${c}/messages/${m}/crosspost`),
 
     async addReaction(c, m, emoji) {
-      await rest.put(`/channels/${c}/messages/${m}/reactions/${encodeURIComponent(emoji)}/@me`)
+      await rest.put(`/channels/${c}/messages/${m}/reactions/${assertEmoji(emoji)}/@me`)
     },
     async removeReaction(c, m, emoji, userId) {
-      await rest.delete(`/channels/${c}/messages/${m}/reactions/${encodeURIComponent(emoji)}/${userId ?? '@me'}`)
+      await rest.delete(`/channels/${c}/messages/${m}/reactions/${assertEmoji(emoji)}/${userId ?? '@me'}`)
     },
     async clearReactions(c, m) {
       await rest.delete(`/channels/${c}/messages/${m}/reactions`)

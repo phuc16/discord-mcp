@@ -19,22 +19,28 @@ const ALL_PERMISSIONS = (1n << 50n) - 1n
 const ADMINISTRATOR = 1n << 3n
 const PAGE = 200
 
+const listAllGuilds = async (rest: Rest): Promise<Dto[]> => {
+  const out: Dto[] = []
+  let after: string | undefined
+  for (;;) {
+    const page = await rest.get<Dto[]>('/users/@me/guilds', { query: { limit: PAGE, after } })
+    out.push(...page)
+    if (page.length < PAGE) return out
+    after = page.at(-1)?.id
+  }
+}
+
 export const guildMethods = (rest: Rest): GuildMethods => ({
   async listBotGuildIds() {
-    const ids: string[] = []
-    let after: string | undefined
-    for (;;) {
-      const page = await rest.get<Dto[]>('/users/@me/guilds', { query: { limit: PAGE, after } })
-      ids.push(...page.map((g) => g.id))
-      if (page.length < PAGE) return ids
-      after = page.at(-1)?.id
-    }
+    return (await listAllGuilds(rest)).map((g) => g.id)
   },
 
   async fetchMemberPermissions(guildId, userId) {
-    const guild = await rest.get<{ owner_id: string }>(`/guilds/${guildId}`)
-    const roles = await rest.get<{ id: string; permissions: string }[]>(`/guilds/${guildId}/roles`)
-    const member = await rest.get<{ roles: string[] }>(`/guilds/${guildId}/members/${userId}`)
+    const [guild, roles, member] = await Promise.all([
+      rest.get<{ owner_id: string }>(`/guilds/${guildId}`),
+      rest.get<{ id: string; permissions: string }[]>(`/guilds/${guildId}/roles`),
+      rest.get<{ roles: string[] }>(`/guilds/${guildId}/members/${userId}`),
+    ])
     if (guild.owner_id === userId) return ALL_PERMISSIONS.toString()
     const held = new Set([guildId, ...member.roles])
     const bits = roles.filter((r) => held.has(r.id)).reduce((acc, r) => acc | BigInt(r.permissions), 0n)
@@ -42,7 +48,7 @@ export const guildMethods = (rest: Rest): GuildMethods => ({
   },
 
   getGuild: (g) => rest.get(`/guilds/${g}`, { query: { with_counts: 'true' } }),
-  listGuilds: () => rest.get('/users/@me/guilds'),
+  listGuilds: () => listAllGuilds(rest),
   updateGuild: (g, patch, reason) => rest.patch(`/guilds/${g}`, { body: patch, reason }),
   getGuildPreview: (g) => rest.get(`/guilds/${g}/preview`),
   getPruneCount: (g, days) => rest.get(`/guilds/${g}/prune`, { query: { days } }),

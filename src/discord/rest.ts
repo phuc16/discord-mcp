@@ -7,7 +7,7 @@ export interface RestOpts {
   query?: Record<string, string | number | undefined>
   reason?: string
   auth?: boolean
-  files?: { name: string; data: Buffer; contentType?: string }[]
+  files?: { name: string; data: Buffer; contentType?: string; key?: string }[]
 }
 
 export interface Rest {
@@ -26,6 +26,7 @@ const toRequest = (o: RestOpts = {}) => {
   const files: RawFile[] | undefined = o.files?.map((f) => ({
     name: f.name,
     data: f.data,
+    ...(f.key ? { key: f.key } : {}),
     ...(f.contentType ? { contentType: f.contentType } : {}),
   }))
   return {

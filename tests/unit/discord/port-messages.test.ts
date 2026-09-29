@@ -38,12 +38,32 @@ describe('message methods', () => {
     const { calls, m } = setup()
     await m.pinMessage('1', '2', 'r')
     await m.unpinMessage('1', '2', 'r')
-    await m.listPins('1')
     expect(calls).toEqual([
-      { verb: 'put', route: '/channels/1/pins/2', reason: 'r' },
-      { verb: 'delete', route: '/channels/1/pins/2', reason: 'r' },
-      { verb: 'get', route: '/channels/1/pins' },
+      { verb: 'put', route: '/channels/1/messages/pins/2', reason: 'r' },
+      { verb: 'delete', route: '/channels/1/messages/pins/2', reason: 'r' },
     ])
+  })
+
+  it('listPins reads the current route and unwraps items across pages', async () => {
+    let n = 0
+    const { calls, m } = setup({
+      '/channels/1/messages/pins': () =>
+        n++ === 0
+          ? { items: [{ pinned_at: 't2', message: { id: 'a' } }], has_more: true }
+          : { items: [{ pinned_at: 't1', message: { id: 'b' } }], has_more: false },
+    })
+    expect(await m.listPins('1')).toEqual([{ id: 'a' }, { id: 'b' }])
+    expect(calls).toEqual([
+      { verb: 'get', route: '/channels/1/messages/pins', query: { limit: 50 } },
+      { verb: 'get', route: '/channels/1/messages/pins', query: { limit: 50, before: 't2' } },
+    ])
+  })
+
+  it.each(['.', '..', ''])('rejects reaction emoji %j', async (emoji) => {
+    const { calls, m } = setup()
+    await expect(m.addReaction('1', '2', emoji)).rejects.toMatchObject({ code: 'invalid_input' })
+    await expect(m.removeReaction('1', '2', emoji)).rejects.toMatchObject({ code: 'invalid_input' })
+    expect(calls).toEqual([])
   })
 
   it('crosspostMessage', async () => {

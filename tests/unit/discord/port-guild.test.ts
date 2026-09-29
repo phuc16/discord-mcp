@@ -29,10 +29,15 @@ describe('guild methods', () => {
     expect(calls).toEqual([{ verb: 'get', route: '/guilds/1', query: { with_counts: 'true' } }])
   })
 
-  it('listGuilds', async () => {
-    const { calls, m } = setup({ '/users/@me/guilds': [{ id: '1' }] })
-    await m.listGuilds()
-    expect(calls).toEqual([{ verb: 'get', route: '/users/@me/guilds' }])
+  it('listGuilds pages with after until a short page', async () => {
+    const page1 = Array.from({ length: 200 }, (_, i) => ({ id: String(1000 + i) }))
+    let n = 0
+    const { calls, m } = setup({ '/users/@me/guilds': () => (n++ === 0 ? page1 : [{ id: '5000' }]) })
+    expect(await m.listGuilds()).toHaveLength(201)
+    expect(calls).toEqual([
+      { verb: 'get', route: '/users/@me/guilds', query: { limit: 200 } },
+      { verb: 'get', route: '/users/@me/guilds', query: { limit: 200, after: '1199' } },
+    ])
   })
 
   it('updateGuild forwards reason', async () => {
@@ -94,6 +99,25 @@ describe('guild methods', () => {
     it('administrator gets all bits', async () => {
       const { m } = setup({ ...base, '/guilds/1/members/5': { roles: ['12'] } })
       expect(await m.fetchMemberPermissions('1', '5')).toBe(ALL)
+    })
+
+    it('issues the three lookups concurrently', async () => {
+      const issued: string[] = []
+      const gate = new Promise<void>((r) => setTimeout(r, 30))
+      const answers: Record<string, unknown> = { '/guilds/1': { owner_id: '99' }, '/guilds/1/roles': roles, '/guilds/1/members/5': { roles: [] } }
+      const rest = recordingRest([], {})
+      const slow = {
+        ...rest,
+        get: async (route: string) => {
+          issued.push(route)
+          await gate
+          return answers[route]
+        },
+      } as typeof rest
+      const pending = guildMethods(slow).fetchMemberPermissions('1', '5')
+      await Promise.resolve()
+      expect(issued).toEqual(['/guilds/1', '/guilds/1/roles', '/guilds/1/members/5'])
+      await pending
     })
 
     it('missing member is not_found', async () => {

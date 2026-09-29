@@ -192,6 +192,36 @@ describe('events service', () => {
     expect(svc.recent('g1', 3).map((e) => e.data.n)).toEqual([3, 4, 5])
   })
 
+  it('recent returns the newest events when the guild has more than 100', () => {
+    const svc = build()
+    svc.start()
+    for (let i = 1; i <= 150; i++) gateway.emit(ev({ data: { n: i } }))
+    const got = svc.recent('g1', 100).map((e) => e.data.n)
+    expect(got).toHaveLength(100)
+    expect(got[0]).toBe(51)
+    expect(got.at(-1)).toBe(150)
+  })
+
+  it('logs swallowed subscriber errors at warn', () => {
+    const warns: string[] = []
+    const svc = createEventsService({
+      store,
+      gateway,
+      config: { events: { retention_hours: 72, max_buffer: 50000 } },
+      guildIds: ['g1'],
+      canRead: () => true,
+      now: () => clock,
+      logger: { warn: (_o, msg) => warns.push(msg) },
+    })
+    svc.subscribe(() => {
+      throw new Error('boom')
+    })
+    svc.start()
+    gateway.emit(ev())
+    expect(warns).toHaveLength(1)
+    expect(all()).toHaveLength(1)
+  })
+
   it('stop is idempotent, unsubscribes and halts pruning', () => {
     vi.useFakeTimers()
     const svc = build({ retention: 1 })

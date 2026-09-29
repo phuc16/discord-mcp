@@ -20,7 +20,7 @@ This repository is also a test bed for an agent team, so the design favors hard 
 ## 3. Stack
 
 - Node 22, TypeScript (strict), ESM.
-- `@modelcontextprotocol/sdk`, `discord.js`, `better-sqlite3`, `zod`, `pino`, `yaml`, `hono` (HTTP server for MCP + OAuth endpoints).
+- `@modelcontextprotocol/sdk`, `discord.js`, `better-sqlite3`, `zod`, `pino`, `yaml`, `express` (HTTP server for MCP + OAuth endpoints; auth builds on the SDK's `OAuthServerProvider` and bearer middleware where they fit).
 - pnpm, vitest, eslint (typescript-eslint + import-boundary rules), tsup for build.
 - Package name `discord-mcp`, single package (modular monolith).
 

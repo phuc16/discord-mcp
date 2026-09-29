@@ -416,7 +416,7 @@ describe('auth provider', () => {
     it('grace does not apply after the new token was revoked or to another client', async () => {
       const t1 = await tokensFor()
       const t2 = await provider.exchangeRefreshToken(client, t1.refresh_token!)
-      await provider.revokeToken(client, { token: t2.refresh_token! } as never)
+      await provider.revokeToken!(client, { token: t2.refresh_token! } as never)
       await expect(provider.exchangeRefreshToken(client, t1.refresh_token!)).rejects.toThrow()
     })
 

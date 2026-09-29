@@ -75,3 +75,24 @@ export const assertOptionalChannelInGuild = async (
 export const assertChannelsInGuild = async (ctx: ToolContext, channelIds: readonly string[], gid: string): Promise<void> => {
   for (const channelId of new Set(channelIds)) await assertChannelInGuild(ctx, channelId, gid)
 }
+
+export const forumTag = z.object({
+  id: snowflake.optional(),
+  name: z.string().min(1).max(20),
+  moderated: z.boolean().optional(),
+  emoji_id: snowflake.nullable().optional(),
+  emoji_name: z.string().nullable().optional(),
+})
+
+export const droppedTags = (current: unknown, next: readonly { id?: string | undefined }[]): string[] => {
+  const keep = new Set(next.flatMap((t) => (t.id ? [t.id] : [])))
+  const existing = Array.isArray(current) ? (current as { id?: string; name?: string }[]) : []
+  return existing.filter((t) => t.id && !keep.has(t.id)).map((t) => `${t.name ?? ''} (${t.id})`)
+}
+
+export const assertTagsNotDropped = (current: unknown, next: readonly { id?: string | undefined }[], allowDrop: boolean | undefined): void => {
+  const dropped = droppedTags(current, next)
+  if (dropped.length > 0 && !allowDrop) {
+    throw new McpToolError('invalid_input', `this update would delete tags: ${dropped.join(', ')}; pass allow_drop_tags: true to confirm`)
+  }
+}

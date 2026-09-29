@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { McpToolError, type AnyToolDef } from '../contracts/index.js'
-import { assertChannelInGuild, assertOptionalChannelInGuild, auditReason, defineTool, defined, guildId, snowflake } from './define.js'
+import { assertChannelInGuild, assertTagsNotDropped, assertOptionalChannelInGuild, auditReason, defineTool, defined, forumTag, guildId, snowflake } from './define.js'
 
 const bits = z.string().regex(/^\d+$/, 'must be a decimal bit string')
 const channelType = z.union([z.literal(0), z.literal(2), z.literal(4), z.literal(5), z.literal(13), z.literal(15)])
@@ -59,14 +59,13 @@ export const channelsUpdate = defineTool({
     nsfw: z.boolean().optional(),
     parent_id: snowflake.nullable().optional(),
     rate_limit_per_user: z.number().int().min(0).max(21600).optional(),
-    available_tags: z
-      .array(z.object({ id: snowflake.optional(), name: z.string().min(1).max(20), emoji_name: z.string().optional(), moderated: z.boolean().optional() }))
-      .max(20)
-      .optional(),
+    available_tags: z.array(forumTag).max(20).optional(),
+    allow_drop_tags: z.boolean().optional(),
   },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, { guild_id, channel_id, ...patch }) => {
-    await assertChannelInGuild(ctx, channel_id, guild_id)
+  handler: async (ctx, { guild_id, channel_id, allow_drop_tags, ...patch }) => {
+    const current = await assertChannelInGuild(ctx, channel_id, guild_id)
+    if (patch.available_tags) assertTagsNotDropped(current.available_tags, patch.available_tags, allow_drop_tags)
     await assertOptionalChannelInGuild(ctx, patch.parent_id, guild_id)
     return { data: await ctx.discord.updateChannel(channel_id, defined(patch), auditReason(ctx)) }
   },
@@ -157,7 +156,7 @@ export const channelsClone = defineTool({
   name: 'channels_clone',
   group: 'channels',
   tier: 'write',
-  description: 'Clone a channel with its type, topic, parent and permission overwrites (write).',
+  description: 'Clone a channel with its type, topic, parent, position, limits, tags and permission overwrites (write).',
   input: { guild_id: guildId, channel_id: snowflake, name: z.string().min(1).max(100).optional() },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
@@ -169,6 +168,11 @@ export const channelsClone = defineTool({
       parent_id: src.parent_id,
       nsfw: src.nsfw,
       permission_overwrites: src.permission_overwrites,
+      bitrate: src.bitrate,
+      user_limit: src.user_limit,
+      rate_limit_per_user: src.rate_limit_per_user,
+      available_tags: src.available_tags,
+      position: src.position,
     })
     return { data: await ctx.discord.createChannel(i.guild_id, spec, auditReason(ctx)) }
   },

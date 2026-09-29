@@ -107,10 +107,33 @@ describe('forum', () => {
     const ctx = makeCtx({ discord: { getChannel: async () => ({ id: C, guild_id: G }) } })
     expect(await run(t('forum_list_tags'), ctx, { guild_id: G, channel_id: C })).toEqual({ items: [] })
   })
+  it('forum_update_tags round-trips forum_list_tags output losslessly', async () => {
+    const tags = [{ id: id('7'), name: 'bug', moderated: false, emoji_id: null, emoji_name: '🐛' }, { id: id('6'), name: 'x', moderated: true, emoji_id: id('5'), emoji_name: null }]
+    const ch = { ...own, available_tags: tags }
+    const ctx = makeCtx({ discord: { getChannel: async () => ch, updateChannel: async () => ch } })
+    const listed = (await run(t('forum_list_tags'), ctx, { guild_id: G, channel_id: C })) as { items: unknown[] }
+    await run(t('forum_update_tags'), ctx, { guild_id: G, channel_id: C, tags: listed.items })
+    expect(ctx.calls.at(-1)?.args[1]).toEqual({ available_tags: tags })
+  })
+  it('forum_update_tags refuses to drop existing tags without allow_drop_tags', async () => {
+    const ctx = makeCtx({ discord: { ...inGuild, updateChannel: async () => own } })
+    await expect(run(t('forum_update_tags'), ctx, { guild_id: G, channel_id: C, tags: [{ name: 'new' }] })).rejects.toMatchObject({ code: 'invalid_input', message: expect.stringContaining('bug') })
+    await run(t('forum_update_tags'), ctx, { guild_id: G, channel_id: C, tags: [{ name: 'new' }], allow_drop_tags: true })
+    expect(ctx.calls.at(-1)?.method).toBe('updateChannel')
+  })
+  it('threads_create defaults type to 11', async () => {
+    const ctx = makeCtx({ discord: { ...inGuild, createThread: async () => ({ id: T }) } })
+    await run(t('threads_create'), ctx, { guild_id: G, channel_id: C, name: 'th' })
+    expect(ctx.calls[1]?.args[1]).toEqual({ name: 'th', type: 11 })
+  })
+  it('threads_list_archived rejects a non ISO before', () => {
+    expect(t('threads_list_archived').input.safeParse({ guild_id: G, channel_id: C, kind: 'public', before: 'yesterday' }).success).toBe(false)
+    expect(t('threads_list_archived').input.safeParse({ guild_id: G, channel_id: C, kind: 'public', before: '2026-01-01T00:00:00Z' }).success).toBe(true)
+  })
   it('forum_update_tags sets available_tags', async () => {
     const tags = [{ name: 'new', moderated: true }]
     const ctx = makeCtx({ discord: { ...inGuild, updateChannel: async () => own } })
-    await run(t('forum_update_tags'), ctx, { guild_id: G, channel_id: C, tags })
+    await run(t('forum_update_tags'), ctx, { guild_id: G, channel_id: C, tags, allow_drop_tags: true })
     expect(ctx.calls[1]).toEqual({ method: 'updateChannel', args: [C, { available_tags: tags }, reason] })
   })
 })

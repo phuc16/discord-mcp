@@ -119,6 +119,12 @@ describe('channels_clone', () => {
       args: [G, { name: 'copy', type: 0, topic: 'hi', parent_id: id('4'), nsfw: false, permission_overwrites: src.permission_overwrites }, reason],
     })
   })
+  it('copies voice, slowmode, tags and position', async () => {
+    const src = { ...own, bitrate: 64000, user_limit: 5, rate_limit_per_user: 10, available_tags: [{ id: id('7'), name: 'a' }], position: 3 }
+    const ctx = makeCtx({ discord: { getChannel: async () => src, createChannel: async () => own } })
+    await run(t('channels_clone'), ctx, { guild_id: G, channel_id: C })
+    expect(ctx.calls[1]?.args[1]).toMatchObject({ bitrate: 64000, user_limit: 5, rate_limit_per_user: 10, available_tags: src.available_tags, position: 3 })
+  })
   it('defaults name to source name', async () => {
     const ctx = makeCtx({ discord: { getChannel: async () => own, createChannel: async () => own } })
     await run(t('channels_clone'), ctx, { guild_id: G, channel_id: C })

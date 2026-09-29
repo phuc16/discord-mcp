@@ -13,16 +13,16 @@ export const createDiscordOAuthPort = (o: {
 }): DiscordOAuthPort => {
   const doFetch = o.fetchImpl ?? fetch
 
-  const unauthorized = () => new McpToolError('unauthorized', 'discord authorization failed')
+  const unauthorized = (status: number) => new McpToolError('unauthorized', 'discord authorization failed', { status })
 
   const send = async (url: string, init: RequestInit): Promise<unknown> => {
     let res: Response
     try {
       res = await doFetch(url, { ...init, signal: AbortSignal.timeout(o.timeoutMs ?? TIMEOUT_MS) })
     } catch {
-      throw unauthorized()
+      throw unauthorized(0)
     }
-    if (!res.ok) throw unauthorized()
+    if (!res.ok) throw unauthorized(res.status)
     return res.json()
   }
 
@@ -43,7 +43,7 @@ export const createDiscordOAuthPort = (o: {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
       })) as { access_token?: string }
-      if (!data.access_token) throw unauthorized()
+      if (!data.access_token) throw unauthorized(200)
       return { accessToken: data.access_token }
     },
     async fetchUser(accessToken) {

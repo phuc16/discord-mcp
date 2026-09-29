@@ -92,4 +92,30 @@ describe('discord oauth port', () => {
     const port = createDiscordOAuthPort({ clientId: 'c', clientSecret: 's', fetchImpl, timeoutMs: 20 })
     await expect(port.fetchUser('at')).rejects.toMatchObject({ code: 'unauthorized' })
   })
+
+  it.each([
+    ['exchangeCode', (port: ReturnType<typeof harness>['port']) => port.exchangeCode('c', 'https://app/cb')],
+    ['fetchUser', (port: ReturnType<typeof harness>['port']) => port.fetchUser('at')],
+    ['fetchUserGuilds', (port: ReturnType<typeof harness>['port']) => port.fetchUserGuilds('at')],
+  ] as const)('%s non-2xx carries the numeric status only', async (_name, call) => {
+    const { port } = harness(() => json({ error: 'sekret body' }, 429))
+    const err = (await call(port).catch((e: unknown) => e)) as McpToolError
+    expect(err.code).toBe('unauthorized')
+    expect(err.details).toEqual({ status: 429 })
+  })
+
+  it('network errors carry status 0', async () => {
+    const fetchImpl = (async () => {
+      throw new Error('ECONNRESET')
+    }) as unknown as typeof fetch
+    const port = createDiscordOAuthPort({ clientId: 'c', clientSecret: 's', fetchImpl })
+    const err = (await port.fetchUser('at').catch((e: unknown) => e)) as McpToolError
+    expect(err.details).toEqual({ status: 0 })
+  })
+
+  it('a missing access_token in a 2xx response carries the status', async () => {
+    const { port } = harness(() => json({}))
+    const err = (await port.exchangeCode('c', 'https://app/cb').catch((e: unknown) => e)) as McpToolError
+    expect(err.details).toEqual({ status: 200 })
+  })
 })

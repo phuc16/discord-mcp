@@ -229,6 +229,7 @@ Covers, step by step: creating the Discord application; adding the bot and enabl
 
 ## 14. Testing
 
+- `invite-url`: preset mapping to permission bits, URL shape, unknown preset rejected.
 - Unit tests per module; vitest coverage gate 85% lines.
 - Contract tests generated from the registry: name format and uniqueness, description, tier, zod schema, `guildFrom`, destructive tools have `preview` and honor caps.
 - Integration: in-memory MCP client against `FakeDiscordPort`. Covers the policy matrix (tier x guild x principal) and confirm token lifecycle (issue, expiry, replay, input mismatch, principal mismatch).

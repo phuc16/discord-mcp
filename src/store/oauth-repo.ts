@@ -35,6 +35,7 @@ export interface OAuthRepo {
   consumeCode(codeHash: string, now: number): AuthCode | null
   saveSession(s: Session): void
   getByAccessHash(h: string): Session | null
+  getByRefreshHash(h: string): Session | null
   rotateRefresh(o: RotateInput): RotateResult
   revokeFamily(familyId: string): void
   revokeByTokenHash(h: string): void
@@ -156,6 +157,10 @@ export const createOAuthRepo = (db: Db): OAuthRepo => {
         .run(s.familyId, s.accessHash, s.refreshHash, s.clientId, s.userId, s.userName, JSON.stringify(s.guilds), s.accessExpiresAt, s.refreshExpiresAt, s.revoked ? 1 : 0),
     getByAccessHash(h) {
       const r = one<SessionRow>('SELECT * FROM oauth_sessions WHERE access_hash = ?', h)
+      return r ? toSession(r) : null
+    },
+    getByRefreshHash(h) {
+      const r = one<SessionRow>('SELECT * FROM oauth_sessions WHERE refresh_hash = ?', h)
       return r ? toSession(r) : null
     },
     rotateRefresh: (o) => rotateRefresh(o),

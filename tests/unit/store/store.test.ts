@@ -223,6 +223,14 @@ describe('OAuthRepo', () => {
     expect(s.oauth.listSessionsForUser('u')).toHaveLength(1)
     expect(s.oauth.listSessionsForUser('other')).toHaveLength(0)
   })
+  it('looks up by refresh hash including revoked', () => {
+    const s = openStore(':memory:')
+    s.oauth.saveSession(session())
+    expect(s.oauth.getByRefreshHash('r1')).toEqual(session())
+    s.oauth.revokeFamily('f1')
+    expect(s.oauth.getByRefreshHash('r1')?.revoked).toBe(true)
+    expect(s.oauth.getByRefreshHash('nope')).toBeNull()
+  })
   it('rotates refresh tokens', () => {
     const s = openStore(':memory:')
     s.oauth.saveSession(session())

@@ -89,7 +89,7 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
   events.start()
   const registry = buildToolRegistry(allTools, config.tools.deny)
   const pipeline = { policy, confirm, audit, limiter, now: clock.now }
-  let services: Services
+  const holder: { services?: Services } = {}
   const rules = createRulesService({
     store,
     policy,
@@ -97,11 +97,12 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
     subscribe: (cb) => events.subscribe(cb),
     toolByName: (name) => registry.get(name),
     discord,
-    services: () => services,
+    services: () => holder.services!,
     logger,
     now: clock.now,
   })
-  services = { events, rules, audit: createAuditPort({ store, policy }), policy }
+  const services: Services = { events, rules, audit: createAuditPort({ store, policy }), policy }
+  holder.services = services
   rules.start()
 
   const open: { client: Client; server: McpServer }[] = []

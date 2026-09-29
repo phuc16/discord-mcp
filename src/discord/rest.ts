@@ -33,7 +33,7 @@ const toRequest = (o: RestOpts = {}) => {
     query,
     reason: o.reason,
     auth: o.auth ?? true,
-    ...(files ? { files } : {}),
+    ...(files ? { files, appendToFormData: true } : {}),
   }
 }
 

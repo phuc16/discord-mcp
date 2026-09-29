@@ -19,6 +19,23 @@ export const createAuthRouter = (provider: AuthProvider, d: { publicBaseUrl: str
   const router = express.Router()
   const base = new URL(d.publicBaseUrl)
 
+  for (const path of ['/token', '/register', '/revoke']) {
+    router.use(path, (req, res, next) => {
+      const origin = req.headers.origin
+      const allowed = origin !== undefined && provider.registeredOrigins().has(origin)
+      const setHeader = res.setHeader.bind(res)
+      res.setHeader = ((name: string, value: number | string | readonly string[]) => {
+        if (name.toLowerCase() !== 'access-control-allow-origin') return setHeader(name, value)
+        if (allowed) {
+          setHeader('Vary', 'Origin')
+          return setHeader(name, origin)
+        }
+        return res
+      }) as typeof res.setHeader
+      next()
+    })
+  }
+
   router.use(mcpAuthRouter({ provider, issuerUrl: base, resourceServerUrl: base, resourceName: 'discord-mcp',
     ...(d.rateLimits && {
       authorizationOptions: { rateLimit: d.rateLimits.authorize },

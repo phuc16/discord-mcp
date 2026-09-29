@@ -20,6 +20,7 @@ const REFRESH_TTL_MS = 30 * 24 * 60 * 60_000
 
 export interface AuthProvider extends OAuthServerProvider {
   handleDiscordCallback(req: { code: string; state: string }): Promise<{ redirectTo: string }>
+  registeredOrigins(): ReadonlySet<string>
 }
 
 export interface AuthProviderDeps {
@@ -93,6 +94,20 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
       url.searchParams.set('redirect_uri', callbackUrl)
       url.searchParams.set('state', state)
       res.redirect(url.toString())
+    },
+
+    registeredOrigins() {
+      const origins = new Set<string>()
+      for (const c of d.store.oauth.listClients()) {
+        for (const uri of c.redirectUris) {
+          try {
+            origins.add(new URL(uri).origin)
+          } catch {
+            continue
+          }
+        }
+      }
+      return origins
     },
 
     async handleDiscordCallback(req) {

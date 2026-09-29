@@ -122,4 +122,49 @@ describe('auth router', () => {
       expect(statuses).toEqual([201, 201, 429])
     })
   })
+
+  describe('cors', () => {
+    const EVIL = 'http://evil.example'
+    const REGISTERED = 'http://localhost:9999'
+    const registerClient = () =>
+      fetch(`${base}/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: [`${REGISTERED}/cb`], token_endpoint_auth_method: 'none' }),
+      })
+
+    beforeEach(async () => {
+      await close()
+      await start({ authorize: false, token: false, register: false, revoke: false })
+    })
+
+    it.each(['/token', '/register', '/revoke'])('POST %s never returns a wildcard or unregistered origin', async (path) => {
+      await registerClient()
+      const r = await fetch(`${base}${path}`, { method: 'POST', headers: { origin: EVIL } })
+      expect(r.headers.get('access-control-allow-origin')).toBeNull()
+    })
+
+    it('no origin is allowed before any client is registered', async () => {
+      const r = await fetch(`${base}/token`, { method: 'OPTIONS', headers: { origin: REGISTERED, 'access-control-request-method': 'POST' } })
+      expect(r.headers.get('access-control-allow-origin')).toBeNull()
+    })
+
+    it.each(['/token', '/register', '/revoke'])('preflight on %s echoes a registered redirect origin', async (path) => {
+      await registerClient()
+      const r = await fetch(`${base}${path}`, { method: 'OPTIONS', headers: { origin: REGISTERED, 'access-control-request-method': 'POST' } })
+      expect(r.headers.get('access-control-allow-origin')).toBe(REGISTERED)
+      expect(r.headers.get('vary')).toMatch(/Origin/i)
+    })
+
+    it('actual POST from a registered origin gets the echoed origin', async () => {
+      await registerClient()
+      const r = await fetch(`${base}/token`, { method: 'POST', headers: { origin: REGISTERED } })
+      expect(r.headers.get('access-control-allow-origin')).toBe(REGISTERED)
+    })
+
+    it('metadata endpoints stay open', async () => {
+      const r = await fetch(`${base}/.well-known/oauth-authorization-server`, { headers: { origin: EVIL } })
+      expect(r.headers.get('access-control-allow-origin')).toBe('*')
+    })
+  })
 })

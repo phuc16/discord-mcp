@@ -5,6 +5,7 @@ import type { OAuthRegisteredClientsStore } from '@modelcontextprotocol/sdk/serv
 import { InvalidGrantError, InvalidRequestError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js'
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js'
 import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js'
+import { McpToolError } from '../contracts/index.js'
 import type { DiscordOAuthPort, DiscordPort } from '../contracts/index.js'
 import type { Session, Store } from '../store/index.js'
 import { createClientsStore } from './clients-store.js'
@@ -125,8 +126,8 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
           expiresAt: now() + CODE_TTL_MS,
         })
         return back({ code })
-      } catch {
-        return back({ error: 'server_error' })
+      } catch (err) {
+        return back({ error: err instanceof McpToolError && err.code === 'unauthorized' ? 'access_denied' : 'server_error' })
       }
     },
 
@@ -150,6 +151,10 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
       let guilds = current?.guilds ?? {}
       if (current && !current.revoked && current.refreshExpiresAt > now() && d.beforeIssue) {
         guilds = (await d.beforeIssue(current)).guilds
+        if (Object.keys(guilds).length === 0) {
+          d.store.oauth.revokeFamily(current.familyId)
+          throw new InvalidGrantError('invalid refresh token')
+        }
       }
       const access = newToken()
       const refresh = newToken()
@@ -179,8 +184,11 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
       }
     },
 
-    async revokeToken(_client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
-      d.store.oauth.revokeByTokenHash(hashSecret(request.token))
+    async revokeToken(client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
+      const h = hashSecret(request.token)
+      const s = d.store.oauth.getByAccessHash(h) ?? d.store.oauth.getByRefreshHash(h)
+      if (!s || s.clientId !== client.client_id) return
+      d.store.oauth.revokeByTokenHash(h)
     },
   }
 }

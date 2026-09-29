@@ -33,14 +33,14 @@ describe('misc methods', () => {
     await m.createScheduledEvent('1', { name: 'e' }, 'r')
     await m.updateScheduledEvent('1', '3', { name: 'f' }, 'r')
     await m.listScheduledEventUsers('1', '3', 25)
-    await m.deleteScheduledEvent('1', '3')
+    await m.deleteScheduledEvent('1', '3', 'r')
     expect(calls).toEqual([
       { verb: 'get', route: '/guilds/1/scheduled-events', query: { with_user_count: 'true' } },
-      { verb: 'get', route: '/guilds/1/scheduled-events/3' },
+      { verb: 'get', route: '/guilds/1/scheduled-events/3', query: { with_user_count: 'true' } },
       { verb: 'post', route: '/guilds/1/scheduled-events', body: { name: 'e' }, reason: 'r' },
       { verb: 'patch', route: '/guilds/1/scheduled-events/3', body: { name: 'f' }, reason: 'r' },
       { verb: 'get', route: '/guilds/1/scheduled-events/3/users', query: { limit: 25 } },
-      { verb: 'delete', route: '/guilds/1/scheduled-events/3' },
+      { verb: 'delete', route: '/guilds/1/scheduled-events/3', reason: 'r' },
     ])
   })
 
@@ -82,10 +82,19 @@ describe('misc methods', () => {
         route: '/guilds/1/stickers',
         body: { name: 's', description: 'd', tags: 't' },
         reason: 'r',
-        files: [{ name: 'sticker.png', data: Buffer.from('png'), contentType: 'image/png' }],
+        files: [{ name: 'sticker.png', key: 'file', data: Buffer.from('png'), contentType: 'image/png' }],
       },
       { verb: 'delete', route: '/guilds/1/stickers/6', reason: 'r' },
     ])
+  })
+
+  it.each([
+    ['image/apng', 'a.apng'],
+    ['application/json', 'a.json'],
+  ] as const)('sticker upload uses input filename and content type %s', async (contentType, filename) => {
+    const { calls, m } = setup()
+    await m.createSticker('1', { name: 's', description: 'd', tags: 't', file: Buffer.from('x').toString('base64'), filename, content_type: contentType })
+    expect(calls[0]?.files).toEqual([{ name: filename, key: 'file', data: Buffer.from('x'), contentType }])
   })
 
   it('listAuditLog', async () => {

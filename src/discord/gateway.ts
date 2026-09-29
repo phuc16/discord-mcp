@@ -1,5 +1,5 @@
 import { Client, type ClientOptions, GatewayIntentBits, Partials } from 'discord.js'
-import type { GatewayPort, GatewayStatus, NewEvent } from '../contracts/index.js'
+import type { GatewayPort, GatewayStatus, GatewayStatusInfo, NewEvent } from '../contracts/index.js'
 import { normalizeGatewayEvent as norm } from './normalize.js'
 
 type Listener = (...args: unknown[]) => void
@@ -39,7 +39,8 @@ const stderrLogger: GatewayLogger = {
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-const READY_EVENTS = ['clientReady', 'ready', 'shardReady', 'shardResume']
+const READY_EVENTS = ['clientReady', 'ready', 'shardReady']
+const RESUME_EVENTS = ['shardResume']
 const DISCONNECT_EVENTS = ['shardDisconnect']
 
 type Handler = (...args: never[]) => NewEvent | null
@@ -73,15 +74,17 @@ export const createGateway = (o: { botToken: string; messageContent: boolean; cl
 
   let current: GatewayStatus = 'disconnected'
   const eventSubs = new Set<(e: NewEvent) => void>()
-  const statusSubs = new Set<(s: GatewayStatus) => void>()
+  const statusSubs = new Set<(s: GatewayStatus, info?: GatewayStatusInfo) => void>()
   const attached: [string, Listener][] = []
 
-  const setStatus = (s: GatewayStatus) => {
+  let disconnectedAt: string | null = null
+
+  const setStatus = (s: GatewayStatus, info?: GatewayStatusInfo) => {
     if (s === current) return
     current = s
     for (const cb of [...statusSubs]) {
       try {
-        cb(s)
+        cb(s, info)
       } catch (err) {
         log.warn({ error: errMsg(err) }, 'gateway status subscriber failed')
       }
@@ -121,8 +124,19 @@ export const createGateway = (o: { botToken: string; messageContent: boolean; cl
         })
       }
       attach('error', (err) => log.error({ error: errMsg(err) }, 'gateway client error'))
-      for (const event of READY_EVENTS) attach(event, () => setStatus('ready'))
-      for (const event of DISCONNECT_EVENTS) attach(event, () => setStatus('disconnected'))
+      const markReady = (resumed: boolean) => {
+        const since = disconnectedAt
+        disconnectedAt = null
+        setStatus('ready', since ? { disconnectedAt: since, reconnectedAt: new Date().toISOString(), resumed } : undefined)
+      }
+      for (const event of READY_EVENTS) attach(event, () => markReady(false))
+      for (const event of RESUME_EVENTS) attach(event, () => markReady(true))
+      for (const event of DISCONNECT_EVENTS) {
+        attach(event, () => {
+          disconnectedAt ??= new Date().toISOString()
+          setStatus('disconnected')
+        })
+      }
       setStatus('connecting')
       await client.login(o.botToken)
     },

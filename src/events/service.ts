@@ -3,6 +3,7 @@ import {
   type EventsPort,
   type GatewayPort,
   type GatewayStatus,
+  type GatewayStatusInfo,
   McpToolError,
   type NewEvent,
   type NormalizedEvent,
@@ -42,6 +43,7 @@ export const createEventsService = (d: {
   let appendsSincePrune = 0
   let lastStatus: GatewayStatus = 'disconnected'
   let hasBeenReady = false
+  let disconnectedAt: string | null = null
 
   const prune = () => {
     appendsSincePrune = 0
@@ -63,13 +65,15 @@ export const createEventsService = (d: {
     if (++appendsSincePrune >= PRUNE_EVERY_APPENDS) prune()
   }
 
-  const onStatus = (s: GatewayStatus) => {
+  const onStatus = (s: GatewayStatus, info?: GatewayStatusInfo) => {
     const reconnected = s === 'ready' && lastStatus === 'disconnected' && hasBeenReady
+    if (s === 'disconnected' && lastStatus !== 'disconnected') disconnectedAt = new Date(now()).toISOString()
     lastStatus = s
     if (s === 'ready') hasBeenReady = true
-    if (!reconnected) return
+    if (!reconnected || info?.resumed) return
     const at = new Date(now()).toISOString()
-    for (const guildId of d.guildIds) record({ guildId, type: 'gap', at, data: {} })
+    const data = { disconnected_at: info?.disconnectedAt ?? disconnectedAt ?? at, reconnected_at: info?.reconnectedAt ?? at }
+    for (const guildId of d.guildIds) record({ guildId, type: 'gap', at, data })
   }
 
   return {

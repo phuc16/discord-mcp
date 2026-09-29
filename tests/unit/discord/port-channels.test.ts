@@ -59,11 +59,25 @@ describe('channel methods', () => {
   })
 
   it('listArchivedThreads returns threads with query', async () => {
-    const { calls, m } = setup({ '/channels/2/threads/archived/private': { threads: [{ id: 't' }] } })
-    expect(await m.listArchivedThreads('2', { kind: 'private', before: 'b', limit: 5 })).toEqual([{ id: 't' }])
+    const { calls, m } = setup({ '/channels/2/threads/archived/private': { threads: [{ id: 't' }], has_more: true } })
+    expect(await m.listArchivedThreads('2', { kind: 'private', before: '2026-01-01T00:00:00.000Z', limit: 5 })).toEqual({
+      threads: [{ id: 't' }],
+      has_more: true,
+    })
     expect(calls).toEqual([
-      { verb: 'get', route: '/channels/2/threads/archived/private', query: { before: 'b', limit: 5 } },
+      { verb: 'get', route: '/channels/2/threads/archived/private', query: { before: '2026-01-01T00:00:00.000Z', limit: 5 } },
     ])
+  })
+
+  it('listArchivedThreads defaults has_more to false', async () => {
+    const { m } = setup({ '/channels/2/threads/archived/public': { threads: [] } })
+    expect(await m.listArchivedThreads('2', { kind: 'public' })).toEqual({ threads: [], has_more: false })
+  })
+
+  it('listArchivedThreads rejects a non-ISO8601 before', async () => {
+    const { calls, m } = setup()
+    await expect(m.listArchivedThreads('2', { kind: 'public', before: 'yesterday' })).rejects.toMatchObject({ code: 'invalid_input' })
+    expect(calls).toEqual([])
   })
 
   it('createThread from message strips message_id', async () => {

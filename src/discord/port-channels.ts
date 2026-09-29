@@ -1,4 +1,4 @@
-import type { DiscordPort, Dto } from '../contracts/index.js'
+import { type DiscordPort, type Dto, McpToolError } from '../contracts/index.js'
 import type { Rest } from './rest.js'
 
 export type ChannelMethods = Pick<
@@ -18,6 +18,8 @@ export type ChannelMethods = Pick<
   | 'removeThreadMember'
   | 'createForumPost'
 >
+
+const ISO8601 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/
 
 export const channelMethods = (rest: Rest): ChannelMethods => ({
   listChannels: (g) => rest.get(`/guilds/${g}/channels`),
@@ -40,10 +42,13 @@ export const channelMethods = (rest: Rest): ChannelMethods => ({
     return res.threads
   },
   async listArchivedThreads(c, q) {
-    const res = await rest.get<{ threads: Dto[] }>(`/channels/${c}/threads/archived/${q.kind}`, {
+    if (q.before !== undefined && !ISO8601.test(q.before)) {
+      throw new McpToolError('invalid_input', 'before must be an ISO8601 timestamp')
+    }
+    const res = await rest.get<{ threads: Dto[]; has_more?: boolean }>(`/channels/${c}/threads/archived/${q.kind}`, {
       query: { before: q.before, limit: q.limit },
     })
-    return res.threads
+    return { threads: res.threads, has_more: res.has_more ?? false }
   },
   createThread(c, spec, reason) {
     const { message_id: messageId, ...body } = spec

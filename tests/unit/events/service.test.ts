@@ -3,17 +3,19 @@ import type { GatewayPort, GatewayStatus, NewEvent, NormalizedEvent, Principal }
 import { createEventsService } from '../../../src/events/index.js'
 import { openStore, type Store } from '../../../src/store/index.js'
 
+type StatusInfo = { disconnectedAt: string; reconnectedAt: string; resumed: boolean }
+
 class FakeGateway implements GatewayPort {
   private current: GatewayStatus = 'disconnected'
   private eventCbs = new Set<(e: NewEvent) => void>()
-  private statusCbs = new Set<(s: GatewayStatus) => void>()
+  private statusCbs = new Set<(s: GatewayStatus, info?: StatusInfo) => void>()
   async start() {}
   async stop() {}
   onEvent(cb: (e: NewEvent) => void) {
     this.eventCbs.add(cb)
     return () => void this.eventCbs.delete(cb)
   }
-  onStatus(cb: (s: GatewayStatus) => void) {
+  onStatus(cb: (s: GatewayStatus, info?: StatusInfo) => void) {
     this.statusCbs.add(cb)
     return () => void this.statusCbs.delete(cb)
   }
@@ -23,9 +25,9 @@ class FakeGateway implements GatewayPort {
   emit(e: NewEvent) {
     for (const cb of [...this.eventCbs]) cb(e)
   }
-  setStatus(s: GatewayStatus) {
+  setStatus(s: GatewayStatus, info?: StatusInfo) {
     this.current = s
-    for (const cb of [...this.statusCbs]) cb(s)
+    for (const cb of [...this.statusCbs]) cb(s, info)
   }
   listeners() {
     return this.eventCbs.size + this.statusCbs.size
@@ -132,6 +134,26 @@ describe('events service', () => {
     gateway.setStatus('ready')
     expect(all('g1').map((e) => e.type)).toEqual(['gap'])
     expect(all('g2').map((e) => e.type)).toEqual(['gap'])
+  })
+
+  it('gap data carries the disconnect and reconnect times', () => {
+    const svc = build()
+    svc.start()
+    gateway.setStatus('ready')
+    gateway.setStatus('disconnected')
+    gateway.setStatus('ready', { disconnectedAt: '2026-01-10T00:00:00.000Z', reconnectedAt: '2026-01-10T00:01:00.000Z', resumed: false })
+    expect(all('g1').map((e) => e.data)).toEqual([
+      { disconnected_at: '2026-01-10T00:00:00.000Z', reconnected_at: '2026-01-10T00:01:00.000Z' },
+    ])
+  })
+
+  it('does not append a gap when the session resumed', () => {
+    const svc = build()
+    svc.start()
+    gateway.setStatus('ready')
+    gateway.setStatus('disconnected')
+    gateway.setStatus('ready', { disconnectedAt: 'a', reconnectedAt: 'b', resumed: true })
+    expect(all('g1')).toEqual([])
   })
 
   it('does not append a gap on first ready', () => {

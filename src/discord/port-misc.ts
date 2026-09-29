@@ -39,14 +39,14 @@ export const miscMethods = (rest: Rest): MiscMethods => ({
   },
 
   listScheduledEvents: (g) => rest.get(`/guilds/${g}/scheduled-events`, { query: { with_user_count: 'true' } }),
-  getScheduledEvent: (g, e) => rest.get(`/guilds/${g}/scheduled-events/${e}`),
+  getScheduledEvent: (g, e) => rest.get(`/guilds/${g}/scheduled-events/${e}`, { query: { with_user_count: 'true' } }),
   createScheduledEvent: (g, spec, reason) => rest.post(`/guilds/${g}/scheduled-events`, { body: spec, reason }),
   updateScheduledEvent: (g, e, patch, reason) =>
     rest.patch(`/guilds/${g}/scheduled-events/${e}`, { body: patch, reason }),
   listScheduledEventUsers: (g, e, limit) =>
     rest.get<Payload[]>(`/guilds/${g}/scheduled-events/${e}/users`, { query: { limit } }),
-  async deleteScheduledEvent(g, e) {
-    await rest.delete(`/guilds/${g}/scheduled-events/${e}`)
+  async deleteScheduledEvent(g, e, reason) {
+    await rest.delete(`/guilds/${g}/scheduled-events/${e}`, { reason })
   },
 
   listInvites: (g) => rest.get<Payload[]>(`/guilds/${g}/invites`),
@@ -64,7 +64,14 @@ export const miscMethods = (rest: Rest): MiscMethods => ({
   createSticker: (g, spec, reason) =>
     rest.post(`/guilds/${g}/stickers`, {
       body: { name: spec.name, description: spec.description, tags: spec.tags },
-      files: [{ name: 'sticker.png', data: Buffer.from(spec.file, 'base64'), contentType: 'image/png' }],
+      files: [
+        {
+          name: spec.filename ?? 'sticker.png',
+          key: 'file',
+          data: Buffer.from(spec.file, 'base64'),
+          contentType: spec.content_type ?? 'image/png',
+        },
+      ],
       reason,
     }),
   async deleteSticker(g, id, reason) {

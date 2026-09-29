@@ -26,9 +26,13 @@ const setup = (messageContent = false) => {
   const gateway = createGateway({ botToken: 'tok', messageContent, client, logger })
   const events: NewEvent[] = []
   const statuses: GatewayStatus[] = []
+  const infos: unknown[] = []
   gateway.onEvent((e) => events.push(e))
-  gateway.onStatus((s) => statuses.push(s))
-  return { client, gateway, events, statuses, logs }
+  gateway.onStatus((s, info) => {
+    statuses.push(s)
+    infos.push(info)
+  })
+  return { client, gateway, events, statuses, logs, infos }
 }
 
 describe('createGateway', () => {
@@ -164,5 +168,33 @@ describe('createGateway', () => {
     await gateway.start()
     expect(() => client.emit('ready')).not.toThrow()
     expect(logs.length).toBeGreaterThan(0)
+  })
+
+  it('fresh ready after a disconnect carries the gap window', async () => {
+    const { client, gateway, infos } = setup()
+    await gateway.start()
+    client.emit('shardReady', 0)
+    client.emit('shardDisconnect')
+    client.emit('shardReady', 0)
+    expect(infos[1]).toBeUndefined()
+    expect(infos[3]).toMatchObject({ resumed: false })
+    const info = infos[3] as { disconnectedAt: string; reconnectedAt: string }
+    expect(Date.parse(info.disconnectedAt)).toBeLessThanOrEqual(Date.parse(info.reconnectedAt))
+  })
+
+  it('shardResume after a disconnect is flagged as resumed', async () => {
+    const { client, gateway, infos } = setup()
+    await gateway.start()
+    client.emit('shardReady', 0)
+    client.emit('shardDisconnect')
+    client.emit('shardResume')
+    expect(infos.at(-1)).toMatchObject({ resumed: true })
+  })
+
+  it('a first-ever ready has no gap info', async () => {
+    const { client, gateway, infos } = setup()
+    await gateway.start()
+    client.emit('ready')
+    expect(infos.at(-1)).toBeUndefined()
   })
 })

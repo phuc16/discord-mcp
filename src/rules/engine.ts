@@ -203,7 +203,7 @@ export const createRuleEngine = (d: EngineDeps): RuleEngine => {
       if (BOT_MESSAGE_EVENTS.has(e.type) && e.data.author_is_bot === true) return
       const now = d.now()
       for (const rule of d.store.rules.listByEvent(e.guildId, e.type)) {
-        if (!(await eventMatches(rule, e, now)) || isSelfCaused(rule, e)) continue
+        if (!(await eventMatches(rule, e, now, (reason) => d.logger.warn({ correlation_id: `rule:${rule.id}:${e.id}`, rule_id: rule.id, reason }, 'regex condition failed closed'))) || isSelfCaused(rule, e)) continue
         if (d.store.rules.getCooldownUntil(rule.id) > now) continue
         if (rule.cooldown_sec > 0) d.store.rules.setCooldownUntil(rule.id, now + rule.cooldown_sec * 1000)
         try {

@@ -69,6 +69,25 @@ describe('eventMatches', () => {
     expect(maxGap).toBeLessThan(150)
   })
 
+  it('a benign pattern matches reliably while other threads saturate the CPU', async () => {
+    const { Worker } = await import('node:worker_threads')
+    const busy = Array.from({ length: 8 }, () => new Worker('const end = Date.now() + 4000; while (Date.now() < end) {}', { eval: true }))
+    try {
+      for (let i = 0; i < 20; i++) {
+        expect(await eventMatches(rule([{ op: 'matches', field: 'u', pattern: '^spam\\d+$' }]), ev({ u: 'spam1' }), NOW)).toBe(true)
+      }
+    } finally {
+      await Promise.all(busy.map((w) => w.terminate()))
+    }
+  })
+
+  it('reports timeouts through the failure hook and evaluates false', async () => {
+    const reasons: string[] = []
+    const hit = await eventMatches(rule([{ op: 'matches', field: 'u', pattern: '(a+)+$' }]), ev({ u: 'a'.repeat(40) + '!' }), NOW, (r) => reasons.push(r))
+    expect(hit).toBe(false)
+    expect(reasons).toEqual(['timeout'])
+  })
+
   it('recovers after a timed-out pattern', async () => {
     const c: Condition = { op: 'matches', field: 'u', pattern: '^ok$' }
     await eventMatches(rule([{ op: 'matches', field: 'u', pattern: '(a+)+$' }]), ev({ u: 'a'.repeat(40) + '!' }), NOW)

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { McpToolError } from '../../../src/contracts/index.js'
 import type { Principal } from '../../../src/contracts/index.js'
 import {
+  createGuards,
   assertCanActOnMember,
   assertCanActOnRole,
   assertCanGrantPermissions,
@@ -79,5 +81,19 @@ describe('hierarchy', () => {
     const owner = ctxFor(user(0n), OWNER)
     await expect(assertCanActOnMember(owner, G, HIGH)).resolves.toBeUndefined()
     await expect(assertCanActOnRole(owner, G, 'r9')).resolves.toBeUndefined()
+  })
+  it('non-member targets (ban by id) are allowed', async () => {
+    const d = { ...discord, getMember: async (_g: string, u: string) => { if (u === 'ghost') throw new McpToolError('not_found', 'x'); return { id: u, roles: members[u] ?? [] } } }
+    await expect(assertCanActOnMember({ discord: d, principal: caller.principal }, G, 'ghost')).resolves.toBeUndefined()
+  })
+})
+
+describe('createGuards', () => {
+  it('binds principal and discord', async () => {
+    const g = createGuards(ctxFor(user(PERM.MANAGE_ROLES)))
+    expect(() => g.assertCanGrantPermissions(G, PERM.ADMINISTRATOR)).toThrow()
+    await expect(g.assertCanActOnRole(G, 'r9')).rejects.toBeDefined()
+    await expect(g.assertCanActOnMember(G, LOW)).resolves.toBeUndefined()
+    await expect(g.assertCanPlaceRole(G, 6)).rejects.toBeDefined()
   })
 })

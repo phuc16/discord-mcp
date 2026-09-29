@@ -15,5 +15,6 @@ export {
   assertCanGrantPermissions,
   assertCanPlaceRole,
   callerHighestPosition,
+  createGuards,
 } from './escalation.js'
 export type { HierarchyContext } from './escalation.js'

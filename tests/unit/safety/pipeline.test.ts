@@ -304,6 +304,24 @@ describe('runTool', () => {
     expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ correlation_id: 'corr-1' }), 'audit write failed')
   })
 
+  it('handler context always carries bound guards that enforce for user principals', async () => {
+    let guards: ToolContext['guards'] | undefined
+    const def = mk({ tier: 'write', handler: async (ctx) => { guards = ctx.guards; return { data: 1 } } })
+    await runTool(deps, def, { guild_id: G }, admin, opts)
+    expect(guards).toBeDefined()
+    const limited: Principal = { kind: 'user', userId: 'x', userName: 'x', guilds: { [G]: PERM.MANAGE_GUILD.toString() } }
+    await runTool(deps, def, { guild_id: G }, limited, opts)
+    expect(() => guards!.assertCanGrantPermissions(G, PERM.ADMINISTRATOR)).toThrowError(expect.objectContaining({ code: 'missing_permissions' }))
+    await runTool(deps, def, { guild_id: G }, stdio, opts)
+    expect(() => guards!.assertCanGrantPermissions(G, PERM.ADMINISTRATOR)).not.toThrow()
+  })
+
+  it('partial results are audited as errors with code partial', async () => {
+    const def = mk({ tier: 'write', handler: async () => ({ data: 1, partial: true }) })
+    await runTool(deps, def, { guild_id: G }, admin, opts)
+    expect(audits()[0]).toMatchObject({ outcome: 'error', errorCode: 'partial' })
+  })
+
   it('writes exactly one audit row per call with actor, hash and latency', async () => {
     const def = mk({ tier: 'write', handler: async () => { clock += 42; return { data: 1 } } })
     await runTool(deps, def, { guild_id: G, channel_id: C }, admin, opts)

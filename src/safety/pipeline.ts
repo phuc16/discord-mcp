@@ -2,6 +2,7 @@ import { McpToolError, tierRank } from '../contracts/index.js'
 import type { AnyToolDef, DiscordPort, ErrorCode, Logger, Principal, PreviewResult, Services, ToolContext, ToolResult } from '../contracts/index.js'
 import type { AuditWriter } from './audit.js'
 import { hashInput } from './confirm.js'
+import { createGuards } from './escalation.js'
 import type { ConfirmService } from './confirm.js'
 import type { BulkLimiter } from './limiter.js'
 import type { PolicyEngine } from './policy.js'
@@ -102,6 +103,7 @@ export const runTool = async (
       correlationId: opts.correlationId,
       logger: opts.logger,
       services: opts.services,
+      guards: createGuards({ discord: opts.discord, principal }),
     }
 
     const runPreview = async (): Promise<PreviewResult> => {
@@ -155,7 +157,8 @@ export const runTool = async (
     }
 
     const result = await execute()
-    record('ok', null)
+    if (result.partial === true) record('error', 'partial')
+    else record('ok', null)
     return result
   } catch (e) {
     if (e instanceof McpToolError) {

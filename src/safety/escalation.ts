@@ -1,5 +1,5 @@
 import { McpToolError } from '../contracts/index.js'
-import type { DiscordPort, Principal } from '../contracts/index.js'
+import type { DiscordPort, Guards, Principal } from '../contracts/index.js'
 import { PERM } from './permissions.js'
 
 export interface HierarchyContext {
@@ -99,6 +99,19 @@ export const assertCanActOnMember = async (
     deny('yourself', { user_id: targetUserId })
   }
   if (caller.owner) return
-  const target = await standingOf(ctx, guildId, targetUserId)
+  let target: Standing
+  try {
+    target = await standingOf(ctx, guildId, targetUserId)
+  } catch (e) {
+    if (e instanceof McpToolError && e.code === 'not_found') return
+    throw e
+  }
   if (target.owner || target.position >= caller.position) deny('a member', { user_id: targetUserId })
 }
+
+export const createGuards = (ctx: HierarchyContext): Guards => ({
+  assertCanGrantPermissions: (guildId, bits) => assertCanGrantPermissions(ctx.principal, guildId, bits),
+  assertCanPlaceRole: (guildId, position) => assertCanPlaceRole(ctx, guildId, position),
+  assertCanActOnRole: (guildId, roleId) => assertCanActOnRole(ctx, guildId, roleId),
+  assertCanActOnMember: (guildId, userId, opts) => assertCanActOnMember(ctx, guildId, userId, opts),
+})

@@ -19,7 +19,7 @@ describe('reads', () => {
   it('sevents_get', async () => {
     const ctx = makeCtx({ discord: { getScheduledEvent: async () => ({ id: E }) } })
     await run(t('sevents_get'), ctx, { guild_id: G, event_id: E })
-    expect(ctx.calls[0]).toEqual({ method: 'getScheduledEvent', args: [G, E, 'via discord-mcp by tester (corr-1)'] })
+    expect(ctx.calls[0]).toEqual({ method: 'getScheduledEvent', args: [G, E] })
   })
   it('sevents_list_users defaults and bounds limit', async () => {
     const ctx = makeCtx({ discord: { listScheduledEventUsers: async () => [] } })

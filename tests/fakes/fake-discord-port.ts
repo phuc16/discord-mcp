@@ -55,6 +55,7 @@ export class FakeDiscordPort implements DiscordPort {
   memberPermissions = new Map<string, string>()
   banOptions = new Map<string, { delete_message_seconds?: number }>()
   auditEntries = new Map<string, Payload[]>()
+  auditExtras: { webhooks?: Payload[]; integrations?: Payload[]; users?: Payload[] } = {}
   stickerUploads: { field: string; contentType: string; filename: string; name: string }[] = []
   calls: { method: string; args: unknown[]; ok?: boolean }[] = []
 
@@ -693,6 +694,6 @@ export class FakeDiscordPort implements DiscordPort {
     const entries = (this.auditEntries.get(guildId) ?? [])
       .filter((e) => (!q.user_id || e.user_id === q.user_id) && (q.action_type === undefined || e.action_type === q.action_type))
       .slice(0, q.limit ?? 50)
-    return { audit_log_entries: entries, users: [], webhooks: [] }
+    return { audit_log_entries: entries, users: this.auditExtras.users ?? [], webhooks: this.auditExtras.webhooks ?? [], integrations: this.auditExtras.integrations ?? [] }
   }
 }

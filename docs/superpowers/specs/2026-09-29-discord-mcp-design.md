@@ -91,6 +91,7 @@ interface Principal {
 }
 
 interface DiscordPort { /* typed methods per Discord operation used by tools; see 6 */ }
+interface GatewayPort { start(); stop(); onEvent(cb: (e: Omit<NormalizedEvent,'id'>) => void); onStatus(cb); status() }  // implemented in discord/, consumed by events/
 
 interface NormalizedEvent { id: number; guildId: string; type: EventType; at: string; data: unknown }
 interface Rule { id: string; guildId: string; ownerUserId: string | null; trigger: { event: EventType; filter: Record<string, unknown> }; conditions: Condition[]; actions: ActionSpec[]; cooldownSec: number; allowDestructive: boolean; enabled: boolean }
@@ -135,6 +136,7 @@ Rules for every tool:
 - Destructive tools implement `preview` returning a human-readable diff/summary and affected counts.
 - `messages_purge` capped at 1000 messages per call; `roles_bulk_assign`, `mod_bulk_ban` capped at 200 targets per call.
 - Handlers use only `ctx.discord`; never `discord.js`.
+- Every tool input carries `guild_id`, except read-tier tools flagged unscoped (`guild_list`, `server_whoami`, `server_policy`). Tools that act through a channel, webhook or invite id verify that the resource belongs to `guild_id` before acting, so an allowlisted `guild_id` cannot be used against a resource in another guild.
 
 The exact list is a starting inventory. The implementation plan finalizes it, and the contract test asserts that every registered tool meets the rules above.
 

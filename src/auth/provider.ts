@@ -19,6 +19,7 @@ const CODE_TTL_MS = 5 * 60_000
 const ACCESS_TTL_MS = 60 * 60_000
 const REFRESH_TTL_MS = 30 * 24 * 60 * 60_000
 const ORIGINS_TTL_MS = 60_000
+const REFRESH_GRACE_MS = 10_000
 export const CONSENT_COOKIE = 'mcp_consent'
 export const STATE_COOKIE = 'mcp_oauth_state'
 
@@ -76,6 +77,7 @@ const clientRedirect = (redirectUri: string, params: Record<string, string | nul
 export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
   const now = d.now ?? Date.now
   const cookieFlags = d.config.publicBaseUrl.startsWith('https:') ? '; Secure' : ''
+  const graceTokens = new Map<string, { clientId: string; tokens: OAuthTokens; newRefreshHash: string; expiresAt: number }>()
   let originsCache: { at: number; origins: Set<string> } | null = null
   const baseClients = createClientsStore(d.store, { allowedRedirectUris: d.config.allowedRedirectUris, maxClients: d.config.maxClients })
   const clientsStore: OAuthRegisteredClientsStore = {
@@ -257,6 +259,12 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
 
     async exchangeRefreshToken(client, refreshToken) {
       const oldRefreshHash = hashSecret(refreshToken)
+      for (const [h, g] of graceTokens) if (g.expiresAt <= now()) graceTokens.delete(h)
+      const graced = graceTokens.get(oldRefreshHash)
+      if (graced && graced.clientId === client.client_id) {
+        const live = d.store.oauth.getByRefreshHash(graced.newRefreshHash)
+        if (live && !live.revoked) return graced.tokens
+      }
       const current = d.store.oauth.getByRefreshHash(oldRefreshHash)
       if (current && current.clientId !== client.client_id) throw new InvalidGrantError('invalid refresh token')
       const access = newToken()
@@ -280,7 +288,9 @@ export const createAuthProvider = (d: AuthProviderDeps): AuthProvider => {
         }
         d.store.oauth.updateSessionGuilds(rotated.session.familyId, refreshed.guilds)
       }
-      return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL_MS / 1000, refresh_token: refresh }
+      const tokens: OAuthTokens = { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL_MS / 1000, refresh_token: refresh }
+      graceTokens.set(oldRefreshHash, { clientId: client.client_id, tokens, newRefreshHash: hashSecret(refresh), expiresAt: now() + REFRESH_GRACE_MS })
+      return tokens
     },
 
     async verifyAccessToken(token): Promise<AuthInfo> {

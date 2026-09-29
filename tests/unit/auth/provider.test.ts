@@ -402,9 +402,28 @@ describe('auth provider', () => {
       await expect(provider.verifyAccessToken(t2.access_token)).resolves.toMatchObject({ clientId: client.client_id })
     })
 
+    it('a retry of the previous refresh token within 10s returns the same pair; later it is reuse', async () => {
+      const t1 = await tokensFor()
+      const t2 = await provider.exchangeRefreshToken(client, t1.refresh_token!)
+      clock += 5_000
+      expect(await provider.exchangeRefreshToken(client, t1.refresh_token!)).toEqual(t2)
+      await expect(provider.verifyAccessToken(t2.access_token)).resolves.toBeTruthy()
+      clock += 6_000
+      await expect(provider.exchangeRefreshToken(client, t1.refresh_token!)).rejects.toThrow(/reuse/)
+      await expect(provider.verifyAccessToken(t2.access_token)).rejects.toThrow()
+    })
+
+    it('grace does not apply after the new token was revoked or to another client', async () => {
+      const t1 = await tokensFor()
+      const t2 = await provider.exchangeRefreshToken(client, t1.refresh_token!)
+      await provider.revokeToken(client, { token: t2.refresh_token! } as never)
+      await expect(provider.exchangeRefreshToken(client, t1.refresh_token!)).rejects.toThrow()
+    })
+
     it('reuse of a rotated refresh token revokes the whole family', async () => {
       const t1 = await tokensFor()
       const t2 = await provider.exchangeRefreshToken(client, t1.refresh_token!)
+      clock += 11_000
       await expect(provider.exchangeRefreshToken(client, t1.refresh_token!)).rejects.toMatchObject({ errorCode: 'invalid_grant' })
       await expect(provider.exchangeRefreshToken(client, t2.refresh_token!)).rejects.toMatchObject({ errorCode: 'invalid_grant' })
       await expect(provider.verifyAccessToken(t2.access_token)).rejects.toThrow()

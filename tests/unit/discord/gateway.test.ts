@@ -1,7 +1,8 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it } from 'vitest'
 import type { GatewayStatus, NewEvent } from '../../../src/contracts/index.js'
-import { createGateway } from '../../../src/discord/gateway.js'
+import { createGateway, gatewayClientOptions } from '../../../src/discord/gateway.js'
+import { Partials } from 'discord.js'
 
 class FakeClient extends EventEmitter {
   loggedIn: string | null = null
@@ -17,12 +18,17 @@ class FakeClient extends EventEmitter {
 
 const setup = (messageContent = false) => {
   const client = new FakeClient()
-  const gateway = createGateway({ botToken: 'tok', messageContent, client })
+  const logs: { level: string; msg: string }[] = []
+  const logger = {
+    warn: (_o: unknown, msg: string) => logs.push({ level: 'warn', msg }),
+    error: (_o: unknown, msg: string) => logs.push({ level: 'error', msg }),
+  }
+  const gateway = createGateway({ botToken: 'tok', messageContent, client, logger })
   const events: NewEvent[] = []
   const statuses: GatewayStatus[] = []
   gateway.onEvent((e) => events.push(e))
   gateway.onStatus((s) => statuses.push(s))
-  return { client, gateway, events, statuses }
+  return { client, gateway, events, statuses, logs }
 }
 
 describe('createGateway', () => {
@@ -102,5 +108,61 @@ describe('createGateway', () => {
     client.emit('roleDelete', { id: 'r', name: 'n', guild: { id: 'g' } })
     expect(events).toEqual([])
     expect(client.listenerCount('roleDelete')).toBe(0)
+  })
+
+  it('client options enable partials for uncached objects', () => {
+    const opts = gatewayClientOptions(false)
+    expect(opts.partials).toEqual(expect.arrayContaining([Partials.Message, Partials.Channel, Partials.GuildMember]))
+  })
+
+  it('emits deletes and removals from partial fixtures', async () => {
+    const { client, gateway, events } = setup(true)
+    await gateway.start()
+    client.emit('messageDelete', { id: 'm', channelId: 'c', guildId: 'g', partial: true })
+    client.emit('messageUpdate', { id: 'm', channelId: 'c', guildId: 'g', partial: true }, { id: 'm', channelId: 'c', guildId: 'g', partial: true })
+    client.emit('guildMemberRemove', { guild: { id: 'g' }, id: 'u', partial: true, user: { id: 'u' } })
+    expect(events.map((e) => e.type)).toEqual(['message_delete', 'message_update', 'member_remove'])
+    expect(events[2]?.data).toMatchObject({ user_id: 'u', roles: [] })
+  })
+
+  it('shardReady marks the gateway ready', async () => {
+    const { client, gateway } = setup()
+    await gateway.start()
+    client.emit('shardReady', 0)
+    expect(gateway.status()).toBe('ready')
+  })
+
+  it('normalizer throwing is logged and does not escape', async () => {
+    const { client, gateway, logs } = setup()
+    await gateway.start()
+    expect(() => client.emit('roleDelete', null)).not.toThrow()
+    expect(logs.some((l) => l.level === 'error')).toBe(true)
+  })
+
+  it('registers a client error listener that logs', async () => {
+    const { client, gateway, logs } = setup()
+    await gateway.start()
+    expect(() => client.emit('error', new Error('ws'))).not.toThrow()
+    expect(logs.some((l) => l.level === 'error')).toBe(true)
+  })
+
+  it('logs swallowed subscriber errors at warn', async () => {
+    const { client, gateway, logs } = setup()
+    gateway.onEvent(() => {
+      throw new Error('boom')
+    })
+    await gateway.start()
+    client.emit('roleDelete', { id: 'r', name: 'n', guild: { id: 'g' } })
+    expect(logs.some((l) => l.level === 'warn')).toBe(true)
+  })
+
+  it('status subscriber errors do not break the listener', async () => {
+    const { client, gateway, logs } = setup()
+    gateway.onStatus(() => {
+      throw new Error('boom')
+    })
+    await gateway.start()
+    expect(() => client.emit('ready')).not.toThrow()
+    expect(logs.length).toBeGreaterThan(0)
   })
 })

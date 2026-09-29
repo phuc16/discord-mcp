@@ -102,4 +102,27 @@ describe('normalizeGatewayEvent', () => {
       guildId: 'g1', type: 'scheduled_event', data: { event_id: 'e1', name: 'Party', action },
     })
   })
+
+  describe('member_update', () => {
+    const member = (ids: string[]) => ({
+      guild: { id: 'g1' }, id: 'u1', user: { username: 'ann' }, roles: { cache: new Map(ids.map((i) => [i, {}])) },
+    })
+
+    it('emits when roles changed', () => {
+      const e = n.member_update!(member(['r1', 'r2']), member(['r1', 'r3']))!
+      expect(e).toMatchObject({
+        guildId: 'g1', type: 'member_update',
+        data: { user_id: 'u1', username: 'ann', old_roles: ['r1', 'r2'], new_roles: ['r1', 'r3'] },
+      })
+    })
+
+    it('returns null when roles are unchanged regardless of order', () => {
+      expect(n.member_update!(member(['r1', 'r2']), member(['r2', 'r1']))).toBeNull()
+    })
+
+    it('emits with empty old_roles when the old member is an uncached partial', () => {
+      const e = n.member_update!({ guild: { id: 'g1' }, id: 'u1', partial: true }, member(['r1']))!
+      expect(e.data).toMatchObject({ old_roles: [], new_roles: ['r1'] })
+    })
+  })
 })

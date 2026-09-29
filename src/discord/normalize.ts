@@ -10,7 +10,7 @@ interface MessageLike {
   author?: UserLike | null
   attachments?: { size: number } | null
 }
-interface MemberLike { guild: GuildRef; id: string; user?: UserLike | null; roles?: { cache: Map<string, unknown> } | null }
+interface MemberLike { guild: GuildRef; id: string; partial?: boolean; user?: UserLike | null; roles?: { cache: Map<string, unknown> } | null }
 interface BanLike { guild: GuildRef; user: UserLike }
 interface RoleLike { id: string; name: string; guild: GuildRef }
 interface ChannelLike { id: string; name?: string | null; type: number; guildId?: string | null }
@@ -40,6 +40,8 @@ const messageEvent = (type: 'message_create' | 'message_update', m: MessageLike,
 
 const roleIds = (m: MemberLike): string[] => [...(m.roles?.cache.keys() ?? [])]
 
+const sameRoles = (a: string[], b: string[]): boolean => a.length === b.length && new Set([...a, ...b]).size === a.length
+
 const channelEvent = (type: 'channel_create' | 'channel_update' | 'channel_delete', c: ChannelLike): NewEvent | null =>
   c.guildId ? build(c.guildId, type, { channel_id: c.id, name: c.name ?? null, type: c.type }) : null
 
@@ -64,6 +66,17 @@ export const normalizeGatewayEvent = {
     }),
   member_remove: (m: MemberLike): NewEvent =>
     build(m.guild.id, 'member_remove', { user_id: m.id, username: m.user?.username ?? null, roles: roleIds(m) }),
+  member_update: (oldMember: MemberLike, m: MemberLike): NewEvent | null => {
+    const oldRoles = roleIds(oldMember)
+    const newRoles = roleIds(m)
+    if (oldMember.roles && sameRoles(oldRoles, newRoles)) return null
+    return build(m.guild.id, 'member_update', {
+      user_id: m.id,
+      username: m.user?.username ?? oldMember.user?.username ?? null,
+      old_roles: oldRoles,
+      new_roles: newRoles,
+    })
+  },
   member_ban: (b: BanLike) => banEvent('member_ban', b),
   member_unban: (b: BanLike) => banEvent('member_unban', b),
 

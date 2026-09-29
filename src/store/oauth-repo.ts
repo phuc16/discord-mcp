@@ -33,6 +33,7 @@ export interface OAuthRepo {
   consumePending(state: string, now: number): PendingAuth | null
   saveCode(c: AuthCode): void
   consumeCode(codeHash: string, now: number): AuthCode | null
+  peekCode(codeHash: string, now: number): AuthCode | null
   saveSession(s: Session): void
   getByAccessHash(h: string): Session | null
   getByRefreshHash(h: string): Session | null
@@ -87,22 +88,28 @@ export const createOAuthRepo = (db: Db): OAuthRepo => {
     }
   })
 
+  const toCode = (codeHash: string, row: Record<string, unknown>): AuthCode => ({
+    codeHash,
+    clientId: row.client_id as string,
+    redirectUri: row.redirect_uri as string,
+    codeChallenge: row.code_challenge as string,
+    userId: row.user_id as string,
+    userName: row.user_name as string,
+    guilds: JSON.parse(row.guilds as string),
+    expiresAt: row.expires_at as number,
+  })
+
   const consumeCode = db.transaction((codeHash: string, now: number): AuthCode | null => {
     const row = one<Record<string, unknown>>('SELECT * FROM oauth_codes WHERE code_hash = ?', codeHash)
     if (!row) return null
     db.prepare('DELETE FROM oauth_codes WHERE code_hash = ?').run(codeHash)
-    if ((row.expires_at as number) <= now) return null
-    return {
-      codeHash,
-      clientId: row.client_id as string,
-      redirectUri: row.redirect_uri as string,
-      codeChallenge: row.code_challenge as string,
-      userId: row.user_id as string,
-      userName: row.user_name as string,
-      guilds: JSON.parse(row.guilds as string),
-      expiresAt: row.expires_at as number,
-    }
+    return (row.expires_at as number) <= now ? null : toCode(codeHash, row)
   })
+
+  const peekCode = (codeHash: string, now: number): AuthCode | null => {
+    const row = one<Record<string, unknown>>('SELECT * FROM oauth_codes WHERE code_hash = ?', codeHash)
+    return row && (row.expires_at as number) > now ? toCode(codeHash, row) : null
+  }
 
   const revokeFamily = (familyId: string): void => void db.prepare('UPDATE oauth_sessions SET revoked = 1 WHERE family_id = ?').run(familyId)
 
@@ -148,6 +155,7 @@ export const createOAuthRepo = (db: Db): OAuthRepo => {
         .prepare('INSERT INTO oauth_codes (code_hash, client_id, redirect_uri, code_challenge, user_id, user_name, guilds, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
         .run(c.codeHash, c.clientId, c.redirectUri, c.codeChallenge, c.userId, c.userName, JSON.stringify(c.guilds), c.expiresAt),
     consumeCode: (h, now) => consumeCode(h, now),
+    peekCode,
     saveSession: (s) =>
       void db
         .prepare(

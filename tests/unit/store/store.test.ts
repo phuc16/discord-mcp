@@ -215,6 +215,17 @@ describe('OAuthRepo', () => {
     s.oauth.saveCode(c)
     expect(s.oauth.consumeCode('h', 101)).toBeNull()
   })
+  it('peekCode does not consume and respects expiry', () => {
+    const s = openStore(':memory:')
+    const c = { codeHash: 'h', clientId: 'c', redirectUri: 'r', codeChallenge: 'cc', userId: 'u', userName: 'n', guilds: { '1': '8' }, expiresAt: 100 }
+    s.oauth.saveCode(c)
+    expect(s.oauth.peekCode('h', 50)).toEqual(c)
+    expect(s.oauth.peekCode('h', 50)).toEqual(c)
+    expect(s.oauth.peekCode('h', 100)).toBeNull()
+    expect(s.oauth.peekCode('zz', 50)).toBeNull()
+    expect(s.oauth.consumeCode('h', 50)).toEqual(c)
+    expect(s.oauth.peekCode('h', 50)).toBeNull()
+  })
   it('session lookup and listing', () => {
     const s = openStore(':memory:')
     s.oauth.saveSession(session())

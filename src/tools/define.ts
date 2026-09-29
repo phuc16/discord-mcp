@@ -57,3 +57,6 @@ export const assertInviteInGuild = async (ctx: ToolContext, code: string, gid: s
   if (!invite) throw notFound('invite', code)
   return invite
 }
+
+export const defined = (o: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined))

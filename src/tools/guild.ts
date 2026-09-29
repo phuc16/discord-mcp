@@ -1,11 +1,8 @@
 import { z } from 'zod'
 import type { AnyToolDef } from '../contracts/index.js'
-import { auditReason, defineTool, guildId, snowflake } from './define.js'
+import { auditReason, defineTool, defined, guildId, snowflake } from './define.js'
 
 const days = z.number().int().min(1).max(30).describe('Days of inactivity')
-
-const defined = (o: Record<string, unknown>): Record<string, unknown> =>
-  Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined))
 
 export const guildList = defineTool({
   name: 'guild_list',

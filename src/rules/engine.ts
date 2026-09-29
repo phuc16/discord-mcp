@@ -18,11 +18,13 @@ export interface EngineDeps {
 export interface RuleEngine {
   handle(e: NormalizedEvent): Promise<void>
   disable(rule: Rule, reason: string, errorCode?: string): void
-  principalFor(rule: Rule): Principal
+  principalFor(rule: Rule): Promise<Principal>
 }
 
 const GUARD_TTL_MS = 30_000
 const ACTIONS_PER_MINUTE = 30
+const OWNER_CACHE_TTL_MS = 60_000
+const BOT_MESSAGE_EVENTS: ReadonlySet<string> = new Set(['message_create', 'message_update'])
 const SNOWFLAKE = /^\d{17,20}$/
 const PRIMARY_KEYS: Record<string, string> = {
   message_create: 'message_id', message_update: 'message_id', message_delete: 'message_id',
@@ -46,6 +48,7 @@ const collectIds = (v: unknown, out: Set<string>, depth = 0): void => {
 export const createRuleEngine = (d: EngineDeps): RuleEngine => {
   const limiter = createBulkLimiter({ perMinute: ACTIONS_PER_MINUTE, now: d.now })
   const touched = new Map<string, number>()
+  const ownerBits = new Map<string, { bits: string | null; expiresAt: number }>()
 
   const touchKey = (ruleId: string, guildId: string, id: string): string => `${ruleId}:${guildId}:${id}`
 
@@ -69,17 +72,29 @@ export const createRuleEngine = (d: EngineDeps): RuleEngine => {
     for (const id of ids) touched.set(touchKey(rule.id, rule.guild_id, id), exp)
   }
 
-  const principalFor = (rule: Rule): Principal => {
+  const verifyOwner = async (userId: string, guildId: string): Promise<string | null> => {
+    const key = `${userId}:${guildId}`
+    const cached = ownerBits.get(key)
+    if (cached && cached.expiresAt > d.now()) return cached.bits
+    let bits: string | null
+    try {
+      bits = await d.discord.fetchMemberPermissions(guildId, userId)
+    } catch (err) {
+      if (err instanceof McpToolError && err.code === 'not_found') bits = null
+      else throw err
+    }
+    ownerBits.set(key, { bits, expiresAt: d.now() + OWNER_CACHE_TTL_MS })
+    return bits
+  }
+
+  const principalFor = async (rule: Rule): Promise<Principal> => {
     if (rule.owner_user_id === null) return { kind: 'service', userId: null, userName: `rule:${rule.id}`, guilds: {} }
     const now = d.now()
-    const sessions = d.store.oauth.listSessionsForUser(rule.owner_user_id).filter((s) => !s.revoked && s.refreshExpiresAt > now)
-    const guilds: Record<string, string> = {}
-    for (const s of sessions) {
-      for (const [g, bits] of Object.entries(s.guilds)) {
-        guilds[g] = (BigInt(guilds[g] ?? '0') | BigInt(bits)).toString()
-      }
-    }
-    return { kind: 'user', userId: rule.owner_user_id, userName: sessions[0]?.userName ?? `owner:${rule.owner_user_id}`, guilds }
+    const sessions = d.store.oauth.listSessionsForUser(rule.owner_user_id).filter((s) => !s.revoked && s.refreshExpiresAt > now && rule.guild_id in s.guilds)
+    const userName = sessions[0]?.userName ?? `owner:${rule.owner_user_id}`
+    if (sessions.length === 0) return { kind: 'user', userId: rule.owner_user_id, userName, guilds: {} }
+    const bits = await verifyOwner(rule.owner_user_id, rule.guild_id)
+    return { kind: 'user', userId: rule.owner_user_id, userName, guilds: bits === null ? {} : { [rule.guild_id]: bits } }
   }
 
   const audit = (
@@ -108,19 +123,30 @@ export const createRuleEngine = (d: EngineDeps): RuleEngine => {
 
   const disable = (rule: Rule, reason: string, errorCode = 'tier_exceeded'): void => {
     d.store.rules.update(rule.id, { enabled: false, disabled_reason: reason })
-    audit(rule, 'rules_auto_disable', 'write', 'denied', errorCode, `rule:${rule.id}`, principalFor(rule))
+    const actor: Principal =
+      rule.owner_user_id === null
+        ? { kind: 'service', userId: null, userName: `rule:${rule.id}`, guilds: {} }
+        : { kind: 'user', userId: rule.owner_user_id, userName: `owner:${rule.owner_user_id}`, guilds: {} }
+    audit(rule, 'rules_auto_disable', 'write', 'denied', errorCode, `rule:${rule.id}`, actor)
     d.logger.warn({ correlation_id: `rule:${rule.id}`, rule_id: rule.id, reason }, 'rule disabled')
   }
 
   const execute = async (rule: Rule, e: NormalizedEvent): Promise<void> => {
     const correlationId = `rule:${rule.id}:${e.id}`
-    const principal = principalFor(rule)
+    let principal: Principal
+    try {
+      principal = await principalFor(rule)
+    } catch (err) {
+      d.logger.warn({ correlation_id: correlationId, rule_id: rule.id, err: err instanceof Error ? err.message : String(err) }, 'owner verification failed')
+      audit(rule, 'rules_owner_verify', 'write', 'error', 'unauthorized', correlationId, { kind: 'service', userId: null, userName: `rule:${rule.id}`, guilds: {} })
+      return
+    }
     const planned: { def: AnyToolDef; input: Record<string, unknown> }[] = []
 
     for (const spec of rule.actions) {
       const def = d.toolByName(spec.tool)
       if (!def) return disable(rule, `unknown tool ${spec.tool}`, 'invalid_input')
-      const effective = d.pipeline.policy.effectiveTier(principal, rule.guild_id, def.group)
+      const effective = d.pipeline.policy.effectiveTier(principal, rule.guild_id, def.group, def.name)
       if (effective === null || tierRank[def.tier] > tierRank[effective]) {
         return disable(rule, `owner tier below ${def.tier} required by ${def.name}`)
       }
@@ -174,9 +200,10 @@ export const createRuleEngine = (d: EngineDeps): RuleEngine => {
     principalFor,
     disable,
     async handle(e) {
+      if (BOT_MESSAGE_EVENTS.has(e.type) && e.data.author_is_bot === true) return
       const now = d.now()
       for (const rule of d.store.rules.listByEvent(e.guildId, e.type)) {
-        if (!eventMatches(rule, e, now) || isSelfCaused(rule, e)) continue
+        if (!(await eventMatches(rule, e, now)) || isSelfCaused(rule, e)) continue
         if (d.store.rules.getCooldownUntil(rule.id) > now) continue
         if (rule.cooldown_sec > 0) d.store.rules.setCooldownUntil(rule.id, now + rule.cooldown_sec * 1000)
         try {

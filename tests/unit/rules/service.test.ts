@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
+import { McpToolError } from '../../../src/contracts/index.js'
 import type { AnyToolDef, NormalizedEvent, Principal, RuleInput, Tier } from '../../../src/contracts/index.js'
 import { createRulesService } from '../../../src/rules/service.js'
 import type { RulesService } from '../../../src/rules/service.js'
@@ -44,8 +45,12 @@ describe('rules service', () => {
   let policy: PolicyEngine
   let pipeline: PipelineDeps
   let ids: number
+  let ownerPerms: Record<string, string | Error>
 
-  const build = (guilds = { [G]: { max_tier: 'destructive' as Tier }, [H]: { max_tier: 'write' as Tier } }) => {
+  const build = (
+    guilds = { [G]: { max_tier: 'destructive' as Tier }, [H]: { max_tier: 'write' as Tier } },
+    limits: { maxPerGuild: number; maxPerOwner?: number; minCooldownSec: number } = { maxPerGuild: 50, minCooldownSec: 0 },
+  ) => {
     policy = new PolicyEngine({ guilds, tools: { deny: [] } })
     pipeline = {
       policy,
@@ -65,9 +70,19 @@ describe('rules service', () => {
         }
       },
       toolByName: (n) => tools.get(n),
-      discord: {} as never,
+      discord: {
+        fetchMemberPermissions: vi.fn(async (guildId: string, userId: string) => {
+          const override = ownerPerms[`${guildId}:${userId}`]
+          if (override instanceof Error) throw override
+          if (override !== undefined) return override
+          const bits = store.oauth.listSessionsForUser(userId)[0]?.guilds[guildId]
+          if (bits === undefined) throw new McpToolError('not_found', 'member not found')
+          return bits
+        }),
+      } as never,
       services: () => ({}) as never,
       logger: log(),
+      limits,
       now: () => clock,
       newId: () => `rule-${++ids}`,
     })
@@ -109,6 +124,7 @@ describe('rules service', () => {
     cb = null
     calls = []
     ids = 0
+    ownerPerms = {}
     tools = new Map()
     addTool('members_add_role', 'write', 'members')
     addTool('channels_create', 'write')
@@ -168,6 +184,60 @@ describe('rules service', () => {
       await expect(
         svc.create(p, baseInput({ guild_id: H, allow_destructive: true, actions: [{ tool: 'channels_delete', input_template: {} }] })),
       ).rejects.toMatchObject({ code: 'tier_exceeded' })
+    })
+  })
+
+  describe('destructive and limits', () => {
+    const del = { tool: 'channels_delete', input_template: {} }
+    const writer = (): Principal => ({ kind: 'user', userId: U, userName: 'w', guilds: { [G]: (PERM.MANAGE_GUILD | PERM.MANAGE_ROLES).toString() } })
+
+    it('write-tier creator cannot set allow_destructive or use destructive actions', async () => {
+      await expect(svc.create(writer(), baseInput({ allow_destructive: true }))).rejects.toMatchObject({ code: 'tier_exceeded' })
+      await expect(svc.create(writer(), baseInput({ allow_destructive: true, actions: [del] }))).rejects.toMatchObject({ code: 'tier_exceeded' })
+    })
+
+    it('write-tier update cannot enable allow_destructive', async () => {
+      const r = await svc.create(writer(), baseInput())
+      await expect(svc.update(writer(), r.id, { allow_destructive: true })).rejects.toMatchObject({ code: 'tier_exceeded' })
+      await expect(svc.update(writer(), r.id, { allow_destructive: true, actions: [del] })).rejects.toMatchObject({ code: 'tier_exceeded' })
+    })
+
+    it('write-tier owner may still disable a rule', async () => {
+      const r = await svc.create(owner(), baseInput({ allow_destructive: true, actions: [del] }))
+      await expect(svc.update({ ...writer(), userId: U }, r.id, { enabled: false })).resolves.toMatchObject({ enabled: false })
+    })
+
+    it('plain readers only see their own rules; destructive tier sees all', async () => {
+      await svc.create(owner(), baseInput())
+      await svc.create(stdio, baseInput())
+      const reader: Principal = { kind: 'user', userId: '888888888888888888', userName: 'r', guilds: { [G]: '0' } }
+      expect(await svc.list(reader, G)).toHaveLength(0)
+      expect(await svc.list(owner(), G)).toHaveLength(2)
+      const own = owner('999999999999999999')
+      await svc.create(own, baseInput())
+      expect(await svc.list({ ...reader, userId: '999999999999999999' }, G)).toHaveLength(1)
+    })
+
+    it('readers cannot test other owners rules', async () => {
+      const r = await svc.create(owner(), baseInput())
+      const reader: Principal = { kind: 'user', userId: '888888888888888888', userName: 'r', guilds: { [G]: '0' } }
+      await expect(svc.test(reader, r.id, ev(1, 'member_join', {}))).rejects.toMatchObject({ code: 'unauthorized' })
+    })
+
+    it('zod errors map to invalid_input', async () => {
+      await expect(svc.create(stdio, { ...baseInput(), actions: [] })).rejects.toMatchObject({ code: 'invalid_input' })
+      const r = await svc.create(stdio, baseInput())
+      await expect(svc.update(stdio, r.id, { cooldown_sec: -5 })).rejects.toMatchObject({ code: 'invalid_input' })
+    })
+
+    it('enforces minimum cooldown, per-guild and per-owner caps', async () => {
+      build(undefined, { maxPerGuild: 3, maxPerOwner: 2, minCooldownSec: 5 })
+      const a = await svc.create(owner(), baseInput())
+      expect(a.cooldown_sec).toBe(5)
+      await svc.create(owner(), baseInput())
+      await expect(svc.create(owner(), baseInput())).rejects.toMatchObject({ code: 'invalid_input', message: expect.stringMatching(/owner/) })
+      await svc.create(stdio, baseInput())
+      await expect(svc.create(stdio, baseInput())).rejects.toMatchObject({ code: 'invalid_input', message: expect.stringMatching(/guild/) })
     })
   })
 
@@ -384,9 +454,114 @@ describe('rules service', () => {
     it('disableForOwner disables only that owners rules', async () => {
       const a = await svc.create(owner(), baseInput())
       const b = await svc.create(owner('666666666666666666'), baseInput())
-      svc.disableForOwner(U, 'demoted')
+      svc.disableForOwner(U, G, 'demoted')
       expect(store.rules.get(a.id)).toMatchObject({ enabled: false, disabled_reason: 'demoted' })
       expect(store.rules.get(b.id)?.enabled).toBe(true)
+    })
+  })
+
+  describe('stale permissions', () => {
+    it('re-verifies the owner through discord and fails closed when it errors', async () => {
+      seedSession(U, { [G]: PERM.ADMINISTRATOR.toString() })
+      const r = await svc.create(owner(), baseInput())
+      ownerPerms[`${G}:${U}`] = new McpToolError('internal', 'discord down')
+      await fire(ev(1, 'member_join', { user_id: '1' }))
+      expect(calls).toHaveLength(0)
+      expect(store.rules.get(r.id)?.enabled).toBe(true)
+    })
+
+    it('a demotion visible only to Discord (session bits stale) stops the rule', async () => {
+      seedSession(U, { [G]: PERM.ADMINISTRATOR.toString() })
+      const r = await svc.create(owner(), baseInput())
+      ownerPerms[`${G}:${U}`] = '0'
+      await fire(ev(1, 'member_join', { user_id: '1' }))
+      expect(calls).toHaveLength(0)
+      expect(store.rules.get(r.id)?.enabled).toBe(false)
+    })
+
+    it('owner who left the guild disables the rule', async () => {
+      seedSession(U, { [G]: PERM.ADMINISTRATOR.toString() })
+      const r = await svc.create(owner(), baseInput())
+      ownerPerms[`${G}:${U}`] = new McpToolError('not_found', 'gone')
+      await fire(ev(1, 'member_join', { user_id: '1' }))
+      expect(store.rules.get(r.id)?.enabled).toBe(false)
+    })
+
+    it('caches verification for 60 seconds', async () => {
+      seedSession(U, { [G]: PERM.ADMINISTRATOR.toString() })
+      await svc.create(owner(), baseInput())
+      await fire(ev(1, 'member_join', { user_id: '1' }))
+      ownerPerms[`${G}:${U}`] = '0'
+      await fire(ev(2, 'member_join', { user_id: '2' }))
+      expect(calls).toHaveLength(2)
+      clock += 61_000
+      await fire(ev(3, 'member_join', { user_id: '3' }))
+      expect(calls).toHaveLength(2)
+    })
+
+    it('does not OR bits across sessions', async () => {
+      seedSession(U, { [G]: '0' })
+      store.oauth.saveSession({
+        familyId: 'f2', accessHash: 'a2', refreshHash: 'r2', clientId: 'c', userId: U, userName: 'owner',
+        guilds: { [G]: PERM.ADMINISTRATOR.toString() }, accessExpiresAt: clock + 1000, refreshExpiresAt: clock + 86_400_000, revoked: false,
+      })
+      const r = await svc.create(stdio, baseInput())
+      store.rules.update(r.id, { owner_user_id: U })
+      ownerPerms[`${G}:${U}`] = '0'
+      await fire(ev(1, 'member_join', { user_id: '1' }))
+      expect(calls).toHaveLength(0)
+    })
+
+    it('disableForOwner only touches the given guild', async () => {
+      const a = await svc.create(owner(), baseInput())
+      const b = await svc.create({ ...owner(), guilds: { [H]: PERM.ADMINISTRATOR.toString() } }, baseInput({ guild_id: H }))
+      svc.disableForOwner(U, G, 'demoted')
+      expect(store.rules.get(a.id)?.enabled).toBe(false)
+      expect(store.rules.get(b.id)?.enabled).toBe(true)
+    })
+  })
+
+  describe('loop bounds', () => {
+    it('bot-authored messages do not trigger message rules', async () => {
+      addTool('messages_send', 'write', 'messages')
+      await svc.create(stdio, baseInput({ trigger: { event: 'message_create', filter: {} }, actions: [{ tool: 'messages_send', input_template: {} }] }))
+      await fire(ev(1, 'message_create', { author_is_bot: true, message_id: '1' }))
+      expect(calls).toHaveLength(0)
+      await fire(ev(2, 'message_create', { author_is_bot: false, message_id: '2' }))
+      expect(calls).toHaveLength(1)
+    })
+
+    it('a slow guild does not stall others', async () => {
+      let release: () => void = () => undefined
+      const gate = new Promise<void>((r) => { release = r })
+      tools.set('slow', {
+        ...tool('slow', 'write', () => ({ ok: true }), 'channels'),
+        handler: async () => { await gate; calls.push({ tool: 'slow', input: {} }); return { data: 1 } },
+      } as AnyToolDef)
+      build({ [G]: { max_tier: 'destructive' }, [H]: { max_tier: 'write' } })
+      await svc.create(stdio, baseInput({ actions: [{ tool: 'slow', input_template: {} }] }))
+      await svc.create(stdio, baseInput({ guild_id: H }))
+      const slow = svc.handleEvent(ev(1, 'member_join', { user_id: '1' }, G))
+      await svc.handleEvent(ev(2, 'member_join', { user_id: '2' }, H))
+      expect(calls.map((c) => c.tool)).toEqual(['members_add_role'])
+      release()
+      await slow
+      expect(calls.map((c) => c.tool)).toEqual(['members_add_role', 'slow'])
+    })
+
+    it('a delete rule does not re-fire on the deletions its own purge causes', async () => {
+      addTool('messages_purge', 'destructive', 'messages')
+      tools.set('messages_purge', tool('messages_purge', 'destructive', (i) => {
+        calls.push({ tool: 'messages_purge', input: i })
+        return { deleted_ids: ['777777777777777771', '777777777777777772'] }
+      }, 'messages'))
+      await svc.create(stdio, baseInput({
+        trigger: { event: 'message_delete', filter: {} }, allow_destructive: true,
+        actions: [{ tool: 'messages_purge', input_template: {} }],
+      }))
+      await fire(ev(1, 'message_delete', { message_id: '555555555555555555' }))
+      for (const id of ['777777777777777771', '777777777777777772']) await fire(ev(2, 'message_delete', { message_id: id }))
+      expect(calls.filter((c) => c.tool === 'messages_purge')).toHaveLength(1)
     })
   })
 

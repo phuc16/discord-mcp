@@ -457,6 +457,30 @@ describe('happy path', () => {
     expect(afterReplay.status).toBe(400)
   }, 30_000)
 
+  it('the refresh grace is per client and does not reach two rotations back', async () => {
+    const s = await fullLogin(codeFor('alice'))
+    const refresh = (client: Registered, token: string) =>
+      req('/token', form({ grant_type: 'refresh_token', client_id: client.client_id, refresh_token: token }), { sensitive: true })
+    const first = await refresh(s.client, s.tokens.refresh_token)
+    expect(first.status).toBe(200)
+    const one = JSON.parse(first.text) as Tokens
+    const second = await refresh(s.client, one.refresh_token)
+    expect(second.status).toBe(200)
+    const twoBack = await refresh(s.client, s.tokens.refresh_token)
+    expect(twoBack.status).toBe(400)
+    expect(JSON.parse(twoBack.text)).not.toMatchObject({ refresh_token: one.refresh_token })
+  })
+
+  it('another client cannot use the grace of a rotated refresh token', async () => {
+    const s = await fullLogin(codeFor('alice'))
+    const rotated = await req('/token', form({ grant_type: 'refresh_token', client_id: s.client.client_id, refresh_token: s.tokens.refresh_token }), { sensitive: true })
+    expect(rotated.status).toBe(200)
+    const other = await register()
+    const stolen = await req('/token', form({ grant_type: 'refresh_token', client_id: other.client_id, refresh_token: s.tokens.refresh_token }), { sensitive: true })
+    expect(stolen.status).toBe(400)
+    expect(stolen.text).not.toContain((JSON.parse(rotated.text) as Tokens).refresh_token)
+  })
+
   it('revoke invalidates the access token', async () => {
     const s = await fullLogin(codeFor('alice'))
     expect((await initialize(s.tokens.access_token)).status).toBe(200)
@@ -697,6 +721,7 @@ describe('consent step before Discord', () => {
     expect(fields.csrf).toBe(csrf)
     expect(page.res.headers.get('cache-control')).toContain('no-store')
     expect(page.res.headers.get('x-frame-options')).toBe('DENY')
+    expect(page.res.headers.get('content-security-policy')).toContain("frame-ancestors 'none'")
     expect(page.res.headers.get('set-cookie')).toMatch(/HttpOnly/i)
   })
 

@@ -11,16 +11,24 @@ export interface Logger {
   debug(obj: Record<string, unknown>, msg?: string): void
 }
 
+export interface Guards {
+  assertCanGrantPermissions(guildId: string, bits: string | bigint): void
+  assertCanPlaceRole(guildId: string, position: number): Promise<void>
+  assertCanActOnRole(guildId: string, roleId: string): Promise<void>
+  assertCanActOnMember(guildId: string, userId: string, opts?: { allowSelf?: boolean }): Promise<void>
+}
+
 export interface ToolContext {
   discord: DiscordPort
   principal: Principal
   correlationId: string
   logger: Logger
   services: Services
+  guards: Guards
 }
 
 export interface PreviewResult { summary: string; affected: Record<string, number>; details?: unknown }
-export interface ToolResult { data: unknown }
+export interface ToolResult { data: unknown; partial?: boolean }
 
 export interface ToolDef<S extends z.ZodObject<z.ZodRawShape> = z.ZodObject<z.ZodRawShape>> {
   name: string

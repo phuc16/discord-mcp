@@ -27,7 +27,7 @@ export interface DiscordPort {
   deleteChannel(channelId: Snowflake, reason?: string): Promise<Dto>
 
   listActiveThreads(guildId: Snowflake): Promise<Dto[]>
-  listArchivedThreads(channelId: Snowflake, q: { kind: 'public' | 'private'; before?: string; limit?: number }): Promise<Dto[]>
+  listArchivedThreads(channelId: Snowflake, q: { kind: 'public' | 'private'; before?: string; limit?: number }): Promise<{ threads: Dto[]; has_more: boolean }>
   createThread(channelId: Snowflake, spec: Payload & { message_id?: Snowflake }, reason?: string): Promise<Dto>
   addThreadMember(threadId: Snowflake, userId: Snowflake): Promise<void>
   removeThreadMember(threadId: Snowflake, userId: Snowflake): Promise<void>
@@ -81,7 +81,7 @@ export interface DiscordPort {
   createScheduledEvent(guildId: Snowflake, spec: Payload, reason?: string): Promise<Dto>
   updateScheduledEvent(guildId: Snowflake, eventId: Snowflake, patch: Payload, reason?: string): Promise<Dto>
   listScheduledEventUsers(guildId: Snowflake, eventId: Snowflake, limit: number): Promise<Payload[]>
-  deleteScheduledEvent(guildId: Snowflake, eventId: Snowflake): Promise<void>
+  deleteScheduledEvent(guildId: Snowflake, eventId: Snowflake, reason?: string): Promise<void>
 
   listInvites(guildId: Snowflake): Promise<Payload[]>
   createInvite(channelId: Snowflake, spec: Payload, reason?: string): Promise<Payload>
@@ -92,18 +92,19 @@ export interface DiscordPort {
   updateEmoji(guildId: Snowflake, emojiId: Snowflake, patch: Payload, reason?: string): Promise<Dto>
   deleteEmoji(guildId: Snowflake, emojiId: Snowflake, reason?: string): Promise<void>
   listStickers(guildId: Snowflake): Promise<Dto[]>
-  createSticker(guildId: Snowflake, spec: { name: string; description: string; tags: string; file: string }, reason?: string): Promise<Dto>
+  createSticker(guildId: Snowflake, spec: { name: string; description: string; tags: string; file: string; filename?: string; content_type?: 'image/png' | 'image/apng' | 'application/json' }, reason?: string): Promise<Dto>
   deleteSticker(guildId: Snowflake, stickerId: Snowflake, reason?: string): Promise<void>
 
   listAuditLog(guildId: Snowflake, q: { user_id?: Snowflake; action_type?: number; limit?: number; before?: Snowflake }): Promise<Payload>
 }
 
 export type GatewayStatus = 'connecting' | 'ready' | 'disconnected'
+export interface GatewayStatusInfo { disconnectedAt: string; reconnectedAt: string; resumed: boolean }
 export interface GatewayPort {
   start(): Promise<void>
   stop(): Promise<void>
   onEvent(cb: (e: NewEvent) => void): () => void
-  onStatus(cb: (s: GatewayStatus) => void): () => void
+  onStatus(cb: (s: GatewayStatus, info?: GatewayStatusInfo) => void): () => void
   status(): GatewayStatus
 }
 

@@ -142,7 +142,7 @@ export const forumCreatePost = defineTool({
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
     await assertChannelInGuild(ctx, i.channel_id, i.guild_id)
-    const spec = defined({ name: i.name, applied_tags: i.applied_tags, message: { content: i.content } })
+    const spec = defined({ name: i.name, applied_tags: i.applied_tags, message: { content: i.content, allowed_mentions: { parse: [] } } })
     return { data: await ctx.discord.createForumPost(i.channel_id, spec, auditReason(ctx)) }
   },
 })

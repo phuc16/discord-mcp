@@ -12,7 +12,8 @@ export const membersList = defineTool({
   handler: async (ctx, i) => {
     const items = await ctx.discord.listMembers(i.guild_id, i.after ? { limit: i.limit, after: i.after } : { limit: i.limit })
     const last = items[items.length - 1]
-    return { data: { items, next_cursor: items.length === i.limit ? last?.id : undefined } }
+    const lastId = (last?.user as { id?: string } | undefined)?.id
+    return { data: { items, next_cursor: items.length === i.limit ? lastId : undefined } }
   },
 })
 

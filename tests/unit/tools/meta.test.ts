@@ -40,7 +40,7 @@ describe('events_poll', () => {
     const ctx = makeCtx({ services: svc({ events: { poll: async (_p, q) => { seen.push(q); return [event] } } }) })
     const out = await run(t('events_poll'), ctx, { guild_id: G })
     expect(seen).toEqual([{ guildId: G, sinceId: 0, limit: 100 }])
-    expect(out).toEqual({ items: [event], next_cursor: '5' })
+    expect(out).toEqual({ items: [event], next_cursor: 5 })
   })
   it('forwards types, since_id and limit', async () => {
     const seen: unknown[] = []

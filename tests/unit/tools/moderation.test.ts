@@ -102,11 +102,50 @@ describe('mod_list_bans', () => {
     await run(t('mod_list_bans'), ctx, { guild_id: G, limit: 50, after: id('1') })
     expect(ctx.calls[0]).toEqual({ method: 'listBans', args: [G, { limit: 50, after: id('1') }] })
   })
+  it('returns next_cursor from the last ban user id when the page is full', async () => {
+    const ctx = makeCtx({ discord: { listBans: async () => [{ user: { id: id('1') } }, { user: { id: id('2') } }] } })
+    const out = (await run(t('mod_list_bans'), ctx, { guild_id: G, limit: 2 })) as { next_cursor?: string }
+    expect(out.next_cursor).toBe(id('2'))
+  })
+  it('omits next_cursor on a short page', async () => {
+    const ctx = makeCtx({ discord: { listBans: async () => [{ user: { id: id('1') } }] } })
+    const out = (await run(t('mod_list_bans'), ctx, { guild_id: G, limit: 2 })) as { next_cursor?: string }
+    expect(out.next_cursor).toBeUndefined()
+  })
   it('defaults limit and bounds it', async () => {
     const ctx = makeCtx({ discord: { listBans: async () => [] } })
     await run(t('mod_list_bans'), ctx, { guild_id: G })
     expect(ctx.calls[0]?.args[1]).toEqual({ limit: 100 })
     expect(t('mod_list_bans').input.safeParse({ guild_id: G, limit: 1001 }).success).toBe(false)
+  })
+})
+
+describe('automod event/trigger cross-check', () => {
+  const base2 = { guild_id: G, name: 'r', actions: [{ type: 1 }] }
+  it('accepts event_type 2 only with trigger_type 6', async () => {
+    const ctx = makeCtx({ discord: { createAutomodRule: async () => ({ id: id('6') }) } })
+    await run(t('automod_create_rule'), ctx, { ...base2, event_type: 2, trigger_type: 6 })
+    await expect(run(t('automod_create_rule'), makeCtx(), { ...base2, event_type: 2, trigger_type: 3 })).rejects.toMatchObject({ code: 'invalid_input' })
+  })
+  it('rejects trigger_type 6 with event_type 1', async () => {
+    await expect(run(t('automod_create_rule'), makeCtx(), { ...base2, event_type: 1, trigger_type: 6 })).rejects.toMatchObject({ code: 'invalid_input' })
+  })
+  it('guild-checks actions metadata channel_id on create and update', async () => {
+    const C = id('2')
+    const discord = { getChannel: async () => ({ id: C, guild_id: OTHER_G }) }
+    const actions = [{ type: 2, metadata: { channel_id: C } }]
+    await expect(run(t('automod_create_rule'), makeCtx({ discord }), { ...base2, event_type: 1, trigger_type: 3, actions })).rejects.toMatchObject({ code: 'not_found' })
+    await expect(run(t('automod_update_rule'), makeCtx({ discord }), { guild_id: G, rule_id: id('6'), actions })).rejects.toMatchObject({ code: 'not_found' })
+  })
+})
+
+describe('mod_bulk_ban dedupe', () => {
+  it('de-duplicates user ids before banning and previewing', async () => {
+    const ctx = makeCtx({ discord: { bulkBan: async () => ({ banned_users: [], failed_users: [] }) } })
+    await run(t('mod_bulk_ban'), ctx, { guild_id: G, user_ids: [U, U, id('8')] })
+    expect(ctx.calls[0]?.args[1]).toEqual([U, id('8')])
+    const p = await runPreview(t('mod_bulk_ban'), makeCtx(), { guild_id: G, user_ids: [U, U] })
+    expect(p.affected).toEqual({ users: 1 })
   })
 })
 

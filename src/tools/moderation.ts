@@ -8,6 +8,10 @@ const automodActions = z
   .array(z.object({ type: z.union([z.literal(1), z.literal(2), z.literal(3)]), metadata: z.record(z.string(), z.unknown()).optional() }))
   .min(1)
   .max(5)
+const actionChannels = (actions: readonly { metadata?: Record<string, unknown> | undefined }[]): string[] =>
+  actions.flatMap((a) => (typeof a.metadata?.channel_id === 'string' ? [a.metadata.channel_id] : []))
+const uniq = (ids: readonly string[]): string[] => [...new Set(ids)]
+const MEMBER_PROFILE_TRIGGER = 6
 const triggerType = z.union([z.literal(1), z.literal(3), z.literal(4), z.literal(5), z.literal(6)])
 
 const describeUser = async (ctx: ToolContext, gid: string, userId: string): Promise<string> => {
@@ -103,13 +107,12 @@ export const modBulkBan = defineTool({
   description: 'Ban up to 200 users at once (destructive).',
   input: { guild_id: guildId, user_ids: z.array(snowflake).min(1).max(200), delete_message_seconds: deleteSeconds, reason },
   guildFrom: (i) => i.guild_id,
-  preview: async (_ctx, i) => ({
-    summary: `Ban ${i.user_ids.length} users`,
-    affected: { users: i.user_ids.length },
-    details: { user_ids: i.user_ids },
-  }),
+  preview: async (_ctx, i) => {
+    const userIds = uniq(i.user_ids)
+    return { summary: `Ban ${userIds.length} users`, affected: { users: userIds.length }, details: { user_ids: userIds } }
+  },
   handler: async (ctx, i) => ({
-    data: await ctx.discord.bulkBan(i.guild_id, i.user_ids, defined({ delete_message_seconds: i.delete_message_seconds }), reasonWith(ctx, i.reason)),
+    data: await ctx.discord.bulkBan(i.guild_id, uniq(i.user_ids), defined({ delete_message_seconds: i.delete_message_seconds }), reasonWith(ctx, i.reason)),
   }),
 })
 
@@ -120,9 +123,11 @@ export const modListBans = defineTool({
   description: 'List bans of a guild (read).',
   input: { guild_id: guildId, limit: z.number().int().min(1).max(1000).default(100), after: snowflake.optional() },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, i) => ({
-    data: { items: await ctx.discord.listBans(i.guild_id, i.after ? { limit: i.limit, after: i.after } : { limit: i.limit }) },
-  }),
+  handler: async (ctx, i) => {
+    const items = await ctx.discord.listBans(i.guild_id, i.after ? { limit: i.limit, after: i.after } : { limit: i.limit })
+    const lastId = (items[items.length - 1]?.user as { id?: string } | undefined)?.id
+    return { data: { items, next_cursor: items.length === i.limit ? lastId : undefined } }
+  },
 })
 
 export const automodListRules = defineTool({
@@ -143,7 +148,7 @@ export const automodCreateRule = defineTool({
   input: {
     guild_id: guildId,
     name: z.string().min(1).max(100),
-    event_type: z.literal(1),
+    event_type: z.union([z.literal(1), z.literal(2)]),
     trigger_type: triggerType,
     trigger_metadata: z.record(z.string(), z.unknown()).optional(),
     actions: automodActions,
@@ -153,7 +158,10 @@ export const automodCreateRule = defineTool({
   },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, { guild_id, ...spec }) => {
-    await assertChannelsInGuild(ctx, spec.exempt_channels ?? [], guild_id)
+    if ((spec.trigger_type === MEMBER_PROFILE_TRIGGER) !== (spec.event_type === 2)) {
+      throw new McpToolError('invalid_input', 'event_type 2 (member update) is required for, and only valid with, trigger_type 6 (member profile)')
+    }
+    await assertChannelsInGuild(ctx, [...(spec.exempt_channels ?? []), ...actionChannels(spec.actions)], guild_id)
     return { data: await ctx.discord.createAutomodRule(guild_id, defined(spec), auditReason(ctx)) }
   },
 })
@@ -175,7 +183,7 @@ export const automodUpdateRule = defineTool({
   },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, { guild_id, rule_id, ...patch }) => {
-    await assertChannelsInGuild(ctx, patch.exempt_channels ?? [], guild_id)
+    await assertChannelsInGuild(ctx, [...(patch.exempt_channels ?? []), ...actionChannels(patch.actions ?? [])], guild_id)
     return { data: await ctx.discord.updateAutomodRule(guild_id, rule_id, defined(patch), auditReason(ctx)) }
   },
 })

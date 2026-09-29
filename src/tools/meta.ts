@@ -73,7 +73,7 @@ export const eventsPoll = defineTool({
     >[1]
     const items = await ctx.services.events.poll(ctx.principal, q)
     const last = items[items.length - 1]
-    return { data: last ? { items, next_cursor: String(last.id) } : { items } }
+    return { data: last ? { items, next_cursor: last.id } : { items } }
   },
 })
 

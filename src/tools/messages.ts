@@ -9,7 +9,7 @@ const DISCORD_EPOCH = 1420070400000n
 
 const embeds = z.array(z.record(z.string(), z.unknown())).max(10)
 const allowedMentions = z.object({
-  parse: z.array(z.enum(['roles', 'users', 'everyone'])).optional(),
+  parse: z.array(z.enum(['roles', 'users'])).optional(),
   users: z.array(snowflake).max(100).optional(),
   roles: z.array(snowflake).max(100).optional(),
   replied_user: z.boolean().optional(),
@@ -116,7 +116,7 @@ export const messagesEdit = defineTool({
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
     await assertChannelInGuild(ctx, i.channel_id, i.guild_id)
-    return { data: await ctx.discord.editMessage(i.channel_id, i.message_id, defined({ content: i.content, embeds: i.embeds })) }
+    return { data: await ctx.discord.editMessage(i.channel_id, i.message_id, defined({ content: i.content, embeds: i.embeds, allowed_mentions: { parse: [] } })) }
   },
 })
 

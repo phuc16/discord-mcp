@@ -16,10 +16,16 @@ describe('member reads', () => {
     expect(ctx.calls[0]).toEqual({ method: 'listMembers', args: [G, { limit: 100 }] })
   })
   it('members_list passes after and returns cursor when page is full', async () => {
-    const page = [{ id: id('1') }, { id: id('2') }]
+    const page = [{ id: id('1'), user: { id: id('1') } }, { id: id('2'), user: { id: id('2') } }]
     const ctx = makeCtx({ discord: { listMembers: async () => page } })
     const out = (await run(t('members_list'), ctx, { guild_id: G, limit: 2, after: id('9') })) as { next_cursor?: string }
     expect(ctx.calls[0]?.args[1]).toEqual({ limit: 2, after: id('9') })
+    expect(out.next_cursor).toBe(id('2'))
+  })
+  it('members_list cursor is the last member user id', async () => {
+    const page = [{ user: { id: id('1') } }, { user: { id: id('2') } }]
+    const ctx = makeCtx({ discord: { listMembers: async () => page as never } })
+    const out = (await run(t('members_list'), ctx, { guild_id: G, limit: 2 })) as { next_cursor?: string }
     expect(out.next_cursor).toBe(id('2'))
   })
   it('members_list rejects limit 1001', () => {

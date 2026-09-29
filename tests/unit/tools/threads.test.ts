@@ -92,7 +92,7 @@ describe('forum', () => {
     await run(t('forum_create_post'), ctx, { guild_id: G, channel_id: C, name: 'post', content: 'hello', applied_tags: [id('7')] })
     expect(ctx.calls[1]).toEqual({
       method: 'createForumPost',
-      args: [C, { name: 'post', applied_tags: [id('7')], message: { content: 'hello' } }, reason],
+      args: [C, { name: 'post', applied_tags: [id('7')], message: { content: 'hello', allowed_mentions: { parse: [] } } }, reason],
     })
   })
   it('forum_create_post rejects foreign channel', async () => {

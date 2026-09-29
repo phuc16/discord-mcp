@@ -97,11 +97,17 @@ describe('messages_send', () => {
   })
 })
 
+describe('mentions', () => {
+  it('rejects everyone in allowed_mentions.parse', () => {
+    expect(() => t('messages_send').input.parse({ guild_id: G, channel_id: C, content: 'x', allowed_mentions: { parse: ['everyone'] } })).toThrow()
+  })
+})
+
 describe('messages_edit', () => {
   it('forwards content and embeds', async () => {
     const ctx = makeCtx({ discord: { ...inGuild, editMessage: async () => ({ id: M }) } })
     await run(t('messages_edit'), ctx, { guild_id: G, channel_id: C, message_id: M, content: 'new' })
-    expect(ctx.calls[1]).toEqual({ method: 'editMessage', args: [C, M, { content: 'new' }] })
+    expect(ctx.calls[1]).toEqual({ method: 'editMessage', args: [C, M, { content: 'new', allowed_mentions: { parse: [] } }] })
   })
 })
 

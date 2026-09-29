@@ -7,7 +7,7 @@ import { McpToolError } from '../../../src/contracts/index.js'
 const G1 = '100000000000000001'
 const G2 = '100000000000000002'
 
-const uid = (m: { user: unknown }): string => (m.user as { id: string }).id
+const uid = (m: object): string => ((m as { user: { id: string } }).user).id
 
 const rejectsWith = async (p: Promise<unknown>, code: string) => {
   const err = await p.then(
@@ -262,7 +262,7 @@ describe('FakeDiscordPort uses the real Discord member and ban shape', () => {
     const [m] = await d.listMembers(G1, { limit: 1 })
     const updated = await d.updateMember(G1, uid(m!), { nick: 'n', id: 'evil', user: { id: 'evil' } })
     expect(updated.nick).toBe('n')
-    expect(uid(updated as { user: unknown })).toBe(uid(m!))
+    expect(uid(updated)).toBe(uid(m!))
     expect(Object.keys(updated)).not.toContain('id')
   })
   it('listMembers pages by user id ascending with after', async () => {
@@ -293,18 +293,20 @@ describe('FakeDiscordPort uses the real Discord member and ban shape', () => {
 })
 
 describe('FakeDiscordPort validates like Discord', () => {
-  it('stickers need name 2-30, tags, and a png/apng/json data URI', async () => {
+  it('stickers need name 2-30, tags, a known content type, matching filename and base64', async () => {
     const { d } = await seeded()
-    const ok = { name: 'sticker', description: 'a sticker', tags: 'x', file: 'data:image/png;base64,AA==' }
+    const ok = { name: 'sticker', description: 'a sticker', tags: 'x', file: 'AA==' }
     await rejectsWith(d.createSticker(G1, { ...ok, name: 'x' }), 'invalid_input')
     await rejectsWith(d.createSticker(G1, { ...ok, tags: '' }), 'invalid_input')
-    await rejectsWith(d.createSticker(G1, { ...ok, file: 'AA==' }), 'invalid_input')
-    await rejectsWith(d.createSticker(G1, { ...ok, file: 'data:image/gif;base64,AA==' }), 'invalid_input')
+    await rejectsWith(d.createSticker(G1, { ...ok, file: 'not base64!' }), 'invalid_input')
+    await rejectsWith(d.createSticker(G1, { ...ok, content_type: 'image/gif' }), 'invalid_input')
+    await rejectsWith(d.createSticker(G1, { ...ok, content_type: 'application/json' }), 'invalid_input')
+    await rejectsWith(d.createSticker(G1, { ...ok, file: Buffer.alloc(600 * 1024).toString('base64') }), 'invalid_input')
     await d.createSticker(G1, ok)
-    await d.createSticker(G1, { ...ok, name: 'lottie', file: 'data:application/json;base64,e30=' })
-    expect(d.stickerUploads.map((u) => [u.field, u.contentType])).toEqual([
-      ['file', 'image/png'],
-      ['file', 'application/json'],
+    await d.createSticker(G1, { ...ok, name: 'lottie', file: 'e30=', filename: 'a.json', content_type: 'application/json' })
+    expect(d.stickerUploads.map((u) => [u.field, u.contentType, u.filename])).toEqual([
+      ['file', 'image/png', 'sticker.png'],
+      ['file', 'application/json', 'a.json'],
     ])
   })
   it('threads: name, archive duration, parent type and one thread per message', async () => {
@@ -339,7 +341,7 @@ describe('FakeDiscordPort validates like Discord', () => {
   it('archived thread listing validates before and filters by kind', async () => {
     const { d, text } = await seeded()
     await rejectsWith(d.listArchivedThreads(text.id, { kind: 'public', before: 'not-a-date' }), 'invalid_input')
-    expect(await d.listArchivedThreads(text.id, { kind: 'public' })).toEqual([])
+    expect(await d.listArchivedThreads(text.id, { kind: 'public' })).toEqual({ threads: [], has_more: false })
   })
   it('roles validate name, permission string and colour; everyone is immutable in name and position', async () => {
     const { d } = await seeded()

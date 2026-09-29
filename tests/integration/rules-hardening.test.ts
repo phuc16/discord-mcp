@@ -288,9 +288,9 @@ describe('rule loops and limits are bounded', () => {
       release = resolve
     })
     const original = harness.discord.addMemberRole.bind(harness.discord)
-    harness.discord.addMemberRole = async (guildId, userId, roleId, reason) => {
+    harness.discord.addMemberRole = async (guildId: string, userId: string, roleId: string) => {
       if (guildId === GUILD_A) await gate
-      return original(guildId, userId, roleId, reason)
+      return original(guildId, userId, roleId)
     }
     harness.gateway.emit({ guildId: GUILD_A, type: 'member_join', at: new Date().toISOString(), data: { user_id: USER } })
     harness.gateway.emit({ guildId: GUILD_B, type: 'member_join', at: new Date().toISOString(), data: { user_id: USER } })

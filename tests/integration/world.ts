@@ -92,7 +92,7 @@ export const buildWorld = async (): Promise<World> => {
     into.code = (await d.createInvite(ch.id, {})).code as string
     into.event_id = (await d.createScheduledEvent(guildId, { name: 'e' })).id
     into.emoji_id = (await d.createEmoji(guildId, { name: 'e', image: 'data:image/png;base64,AA==' })).id
-    into.sticker_id = (await d.createSticker(guildId, { name: 'sticker', description: 'sticker', tags: 't', file: 'data:image/png;base64,AA==' })).id
+    into.sticker_id = (await d.createSticker(guildId, { name: 'sticker', description: 'sticker', tags: 't', file: 'AA==' })).id
     into.role_id = (await d.createRole(guildId, { name: 'r' })).id
     into.rule_id = (await d.createAutomodRule(guildId, { name: 'am', event_type: 1, trigger_type: 1, actions: [{ type: 1 }] })).id
   }

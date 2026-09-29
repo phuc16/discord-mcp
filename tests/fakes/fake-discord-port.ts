@@ -27,7 +27,10 @@ const cmpId = (a: string, b: string): number => {
 const PERMISSION_BITS = /^\d{1,20}$/
 const THREAD_ARCHIVE_MINUTES = new Set([60, 1440, 4320, 10080])
 const THREAD_PARENT_TYPES: Record<number, number[]> = { 11: [0, 5], 12: [0], 10: [5] }
-const STICKER_MIME = /^data:(image\/png|image\/apng|application\/json);base64,[A-Za-z0-9+/=]+$/
+const STICKER_MIME = new Set(['image/png', 'image/apng', 'application/json'])
+const STICKER_EXT: Record<string, RegExp> = { 'image/png': /\.png$/i, 'image/apng': /\.(png|apng)$/i, 'application/json': /\.json$/i }
+const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/
+const STICKER_MAX_BYTES = 512 * 1024
 const AUTOMOD_EVENT_MESSAGE_SEND = 1
 const AUTOMOD_EVENT_MEMBER_UPDATE = 2
 const AUTOMOD_TRIGGER_MEMBER_PROFILE = 6
@@ -52,7 +55,7 @@ export class FakeDiscordPort implements DiscordPort {
   memberPermissions = new Map<string, string>()
   banOptions = new Map<string, { delete_message_seconds?: number }>()
   auditEntries = new Map<string, Payload[]>()
-  stickerUploads: { field: string; contentType: string; name: string }[] = []
+  stickerUploads: { field: string; contentType: string; filename: string; name: string }[] = []
   calls: { method: string; args: unknown[]; ok?: boolean }[] = []
 
   constructor() {
@@ -283,13 +286,15 @@ export class FakeDiscordPort implements DiscordPort {
     return [...this.channels.values()].filter((c) => c.guild_id === guildId && [10, 11, 12].includes(c.type as number))
   }
 
-  async listArchivedThreads(channelId: Snowflake, q: { kind: 'public' | 'private'; before?: string; limit?: number }): Promise<Dto[]> {
+  async listArchivedThreads(channelId: Snowflake, q: { kind: 'public' | 'private'; before?: string; limit?: number }): Promise<{ threads: Dto[]; has_more: boolean }> {
     const parent = this.#channel(channelId)
     if (q.before !== undefined && Number.isNaN(Date.parse(q.before))) throw invalid('before must be an ISO8601 timestamp')
     const wanted = q.kind === 'public' ? [10, 11] : [12]
-    return [...this.channels.values()]
-      .filter((c) => c.parent_id === parent.id && wanted.includes(c.type as number) && (c.thread_metadata as Payload | undefined)?.archived === true)
-      .slice(0, q.limit ?? 50)
+    const all = [...this.channels.values()].filter(
+      (c) => c.parent_id === parent.id && wanted.includes(c.type as number) && (c.thread_metadata as Payload | undefined)?.archived === true,
+    )
+    const limit = q.limit ?? 50
+    return { threads: all.slice(0, limit), has_more: all.length > limit }
   }
 
   async createThread(channelId: Snowflake, spec: Payload & { message_id?: Snowflake }): Promise<Dto> {
@@ -658,14 +663,21 @@ export class FakeDiscordPort implements DiscordPort {
     return [...this.stickers.values()].filter((s) => s.guild_id === guildId)
   }
 
-  async createSticker(guildId: Snowflake, spec: { name: string; description: string; tags: string; file: string }): Promise<Dto> {
+  async createSticker(
+    guildId: Snowflake,
+    spec: { name: string; description: string; tags: string; file: string; filename?: string; content_type?: string },
+  ): Promise<Dto> {
     this.#guild(guildId)
     if (spec.name.length < 2 || spec.name.length > 30) throw invalid('sticker name must be 2-30 characters')
     if (spec.description.length !== 0 && (spec.description.length < 2 || spec.description.length > 100)) throw invalid('sticker description must be empty or 2-100 characters')
     if (spec.tags.length < 1 || spec.tags.length > 200) throw invalid('sticker tags must be 1-200 characters')
-    const mime = STICKER_MIME.exec(spec.file)?.[1]
-    if (!mime) throw invalid('sticker file must be a png, apng or json data URI')
-    this.stickerUploads.push({ field: 'file', contentType: mime, name: spec.name })
+    const contentType = spec.content_type ?? 'image/png'
+    const filename = spec.filename ?? 'sticker.png'
+    if (!STICKER_MIME.has(contentType)) throw invalid('sticker content type must be image/png, image/apng or application/json')
+    if (!STICKER_EXT[contentType]!.test(filename)) throw invalid('sticker filename extension does not match its content type')
+    if (!BASE64.test(spec.file) || spec.file.length % 4 !== 0) throw invalid('sticker file must be base64')
+    if (Buffer.from(spec.file, 'base64').length > STICKER_MAX_BYTES) throw invalid('sticker file is larger than 512KB')
+    this.stickerUploads.push({ field: 'file', contentType, filename, name: spec.name })
     const s: Dto = { name: spec.name, description: spec.description, tags: spec.tags, id: nextId(), guild_id: guildId }
     this.stickers.set(s.id, s)
     return s

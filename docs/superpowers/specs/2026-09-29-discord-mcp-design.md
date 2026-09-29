@@ -208,7 +208,7 @@ Tokens: access token 1 hour, refresh token 30 days, both opaque and stored hashe
 
 Service tokens (`http.service_tokens`) give a `service` principal governed only by policy.
 
-Secrets from environment: `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL`, `TOKEN_SIGNING_KEY`.
+Secrets from environment: `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL`. Tokens are opaque and stored hashed, so no signing key is needed.
 
 Security requirements: exact redirect URI match, PKCE required, state single use and 10 minute TTL, constant-time token comparison, no secrets or tokens in logs, CORS restricted to registered redirect origins, request body size limits.
 

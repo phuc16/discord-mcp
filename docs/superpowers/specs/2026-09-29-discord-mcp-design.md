@@ -219,8 +219,13 @@ SQLite via better-sqlite3, WAL mode, versioned migrations applied on start. Tabl
 - Assembles registry of all `ToolDef`s, wires `runTool`, registers MCP tools and resources.
 - Transports: stdio (default) and streamable HTTP (`--http`).
 - `GET /healthz` reports gateway and DB status.
+- `discord-mcp invite-url [--permissions <preset|bits>]` prints the bot invite URL from `DISCORD_CLIENT_ID` (scope `bot` only). Presets: `read`, `moderator`, `manager`, `admin`; default `manager`. Unknown presets are rejected.
 - Graceful shutdown closes the gateway, HTTP server, and DB.
 - Structured pino JSON logs with fields `correlation_id`, `request_id`, `trace_id`, `span_id`, `method`, `path`, `status`, `ip`, `latency`, `user_name`.
+
+### 13.1 Getting started doc (`docs/getting-started.md`)
+
+Covers, step by step: creating the Discord application; adding the bot and enabling privileged intents (Server Members, Message Content if wanted); copying `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `DISCORD_BOT_TOKEN`; setting the OAuth redirect URI to `PUBLIC_BASE_URL/callback`; generating the invite URL with `invite-url`; placing the bot role high enough in the guild role list; writing `config.yaml`; running `--check`; connecting via `claude mcp add` in stdio mode and in HTTP mode; and a manual smoke checklist. Also explains that a bot identity is required (actions and gateway events), and the user login only establishes admin identity.
 
 ## 14. Testing
 
@@ -240,7 +245,7 @@ SQLite via better-sqlite3, WAL mode, versioned migrations applied on start. Tabl
 
 | Teammate | Owns |
 |---|---|
-| `core` | `src/contracts/`, `src/store/`, `src/cli/`, `src/server/`, config, package/tooling/CI, README, `docs/` |
+| `core` | `src/contracts/`, `src/store/`, `src/cli/`, `src/server/`, config, package/tooling/CI, README, `docs/` (including `docs/getting-started.md`) |
 | `discord` | `src/discord/`, `src/events/` |
 | `tools` | `src/tools/**` |
 | `safety` | `src/safety/`, `src/rules/`, `src/auth/` |

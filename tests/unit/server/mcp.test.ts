@@ -35,7 +35,7 @@ const setup = async (runTool: RunToolFn, opts: { feed?: boolean } = {}) => {
   return { client, deps, listeners, poll }
 }
 
-const text = (r: { content: unknown }): unknown => JSON.parse(((r.content as { text: string }[])[0]!).text)
+const text = (r: unknown): unknown => JSON.parse((r as { content: { text: string }[] }).content[0]!.text)
 
 describe('createMcpServer', () => {
   it('lists tools including confirm_token on destructive', async () => {

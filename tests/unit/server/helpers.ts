@@ -7,7 +7,7 @@ export const fakeTool = (name: string, tier: Tier): AnyToolDef => ({
   description: 'd',
   tier,
   input: z.object({ guild_id: z.string() }),
-  guildFrom: (i) => i.guild_id,
+  guildFrom: (i) => i.guild_id as string,
   preview: tier === 'destructive' ? async () => ({ summary: 's', affected: {} }) : undefined,
   handler: async () => ({ data: name }),
 })

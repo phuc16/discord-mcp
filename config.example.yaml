@@ -1,0 +1,16 @@
+guilds:
+  "123456789012345678":
+    max_tier: destructive
+tools:
+  deny: []
+rate_limits:
+  bulk_per_minute: 5
+events:
+  retention_hours: 72
+  max_buffer: 50000
+http:
+  host: 0.0.0.0
+  port: 8787
+  service_tokens: []
+message_content_intent: false
+database_path: ./discord-mcp.db

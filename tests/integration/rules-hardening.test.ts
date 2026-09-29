@@ -302,6 +302,36 @@ describe('rule loops and limits are bounded', () => {
   })
 })
 
+describe('rules run with the owner hierarchy, not with bot power', () => {
+  const MANAGE_ROLES_GUILD = ((1n << 28n) | (1n << 5n)).toString()
+  const owner = (bits: string): Principal => ({ kind: 'user', userId: ADMIN_ID, userName: 'roleman', guilds: { [GUILD_A]: bits } })
+
+  it('a rule owned by a role manager cannot hand out a role above the owner', async () => {
+    const { harness } = await setup()
+    const d = harness.discord
+    const own = await d.createRole(GUILD_A, { name: 'own' })
+    const above = await d.createRole(GUILD_A, { name: 'above' })
+    await d.updateRole(GUILD_A, own.id, { position: 5 })
+    await d.updateRole(GUILD_A, above.id, { position: 9 })
+    d.members.get(GUILD_A)!.set(ADMIN_ID, { user: { id: ADMIN_ID, username: 'roleman' }, roles: [own.id] } as never)
+    d.memberPermissions.set(`${GUILD_A}:${ADMIN_ID}`, MANAGE_ROLES_GUILD)
+    harness.store.oauth.saveSession({
+      familyId: 'f-rm', accessHash: 'a-rm', refreshHash: 'r-rm', clientId: 'c', userId: ADMIN_ID, userName: 'roleman',
+      guilds: { [GUILD_A]: MANAGE_ROLES_GUILD }, accessExpiresAt: harness.clock.now() + 3_600_000, refreshExpiresAt: harness.clock.now() + 86_400_000, revoked: false,
+    })
+    const client = await harness.asPrincipal(owner(MANAGE_ROLES_GUILD))
+    const created = await call(client, 'rules_create', assignRule(above.id))
+    if (created.isError) {
+      expect(created.code).toMatch(/missing_permissions|invalid_input|tier_exceeded/)
+      return
+    }
+    d.calls.length = 0
+    await emit(harness, 'member_join', { user_id: USER })
+    expect(d.members.get(GUILD_A)!.get(USER)!.roles).not.toContain(above.id)
+    expect(calls(harness, 'addMemberRole')).toHaveLength(0)
+  })
+})
+
 describe('rule owners are re-verified before a rule runs', () => {
   const adminOwner: Principal = { kind: 'user', userId: ADMIN_ID, userName: 'admin', guilds: { [GUILD_A]: '8' } }
 

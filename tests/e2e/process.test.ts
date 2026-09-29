@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -78,6 +79,21 @@ describe('single instance lock', () => {
     openStore(file).close()
     const second = openStore(file)
     second.close()
+  })
+})
+
+describe('schema versioning', () => {
+  it('refuses a database written by a newer build and leaves it untouched', () => {
+    const file = join(tmp(), 'future.db')
+    openStore(file).close()
+    const raw = new Database(file)
+    raw.prepare("UPDATE meta SET value = '999' WHERE key = 'schema_version'").run()
+    raw.close()
+    expect(() => openStore(file)).toThrow(/newer than this build/)
+    expect(() => openStore(file)).toThrow(/newer than this build/)
+    const after = new Database(file)
+    expect((after.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value).toBe('999')
+    after.close()
   })
 })
 

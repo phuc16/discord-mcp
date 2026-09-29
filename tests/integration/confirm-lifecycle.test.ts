@@ -123,3 +123,40 @@ describe('confirm lifecycle', () => {
     expect(r.isError).toBe(false)
   })
 })
+
+describe('in-band elicitation', () => {
+  it('accept executes without a token and audits a single ok row', async () => {
+    const { harness, ch1 } = await setup()
+    const asked: string[] = []
+    const client = await harness.asPrincipal(principals.stdio, { elicit: 'accept', onElicit: (m) => asked.push(m) })
+    const r = await call(client, 'channels_delete', { guild_id: GUILD_A, channel_id: ch1 })
+    expect(r.isError).toBe(false)
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toContain('one')
+    expect(harness.discord.channels.has(ch1)).toBe(false)
+    expect(harness.store.audit.query({ limit: 10 }).map((a) => a.outcome)).toEqual(['ok'])
+  })
+
+  it('decline does not execute and is audited as denied', async () => {
+    const { harness, ch1 } = await setup()
+    const client = await harness.asPrincipal(principals.stdio, { elicit: 'decline' })
+    const r = await call(client, 'channels_delete', { guild_id: GUILD_A, channel_id: ch1 })
+    expect(r.code).toBe('confirm_invalid')
+    expect(harness.discord.channels.has(ch1)).toBe(true)
+    expect(deletes(harness)).toBe(0)
+    expect(harness.store.audit.query({ limit: 10 }).map((a) => [a.outcome, a.errorCode])).toEqual([['denied', 'confirm_invalid']])
+  })
+
+  it('elicitation never bypasses tier checks', async () => {
+    const harness = await buildHarness({ config: { guilds: { [GUILD_A]: { max_tier: 'write' } } } })
+    h = harness
+    harness.discord.seedGuild(GUILD_A)
+    const ch = (await harness.discord.createChannel(GUILD_A, { name: 'x', type: 0 })).id
+    const asked: string[] = []
+    const client = await harness.asPrincipal(principals.stdio, { elicit: 'accept', onElicit: (m) => asked.push(m) })
+    const r = await call(client, 'channels_delete', { guild_id: GUILD_A, channel_id: ch })
+    expect(r.code).toBe('tier_exceeded')
+    expect(asked).toEqual([])
+    expect(harness.discord.channels.has(ch)).toBe(true)
+  })
+})

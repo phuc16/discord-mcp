@@ -1,6 +1,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
+import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { ConfigSchema } from '../../src/contracts/index.js'
 import type { Config, Logger, Principal, Services } from '../../src/contracts/index.js'
 import { createEventsService } from '../../src/events/index.js'
@@ -32,6 +33,11 @@ export interface Clock {
   advance(ms: number): void
 }
 
+export interface ConnectOptions {
+  elicit?: 'accept' | 'decline'
+  onElicit?: (message: string) => void
+}
+
 export interface LogLine {
   level: string
   obj: Record<string, unknown>
@@ -51,7 +57,7 @@ export interface Harness {
   clock: Clock
   logs: LogLine[]
   close(): Promise<void>
-  asPrincipal(p: Principal): Promise<Client>
+  asPrincipal(p: Principal, opts?: ConnectOptions): Promise<Client>
 }
 
 export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promise<Harness> => {
@@ -106,7 +112,7 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
   rules.start()
 
   const open: { client: Client; server: McpServer }[] = []
-  const connect = async (principal: Principal): Promise<{ client: Client; server: McpServer }> => {
+  const connect = async (principal: Principal, copts: ConnectOptions = {}): Promise<{ client: Client; server: McpServer }> => {
     const server = createMcpServer(
       {
         registry,
@@ -118,7 +124,14 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
       },
       () => principal,
     )
-    const client = new Client({ name: 'qa', version: '0.0.0' })
+    const client = new Client({ name: 'qa', version: '0.0.0' }, copts.elicit ? { capabilities: { elicitation: {} } } : {})
+    if (copts.elicit) {
+      const action = copts.elicit
+      client.setRequestHandler(ElicitRequestSchema, async (request) => {
+        copts.onElicit?.(request.params.message)
+        return { action }
+      })
+    }
     const [a, b] = InMemoryTransport.createLinkedPair()
     await Promise.all([server.connect(a), client.connect(b)])
     const pair = { client, server }
@@ -139,7 +152,7 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
     config,
     clock,
     logs,
-    asPrincipal: async (p) => (await connect(p)).client,
+    asPrincipal: async (p, copts) => (await connect(p, copts)).client,
     close: async () => {
       for (const { client, server } of open) {
         await client.close()

@@ -34,7 +34,7 @@ export interface Clock {
 }
 
 export interface ConnectOptions {
-  elicit?: 'accept' | 'decline'
+  elicit?: 'accept' | 'decline' | 'error'
   onElicit?: (message: string) => void
 }
 
@@ -130,6 +130,7 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
       const action = copts.elicit
       client.setRequestHandler(ElicitRequestSchema, async (request) => {
         copts.onElicit?.(request.params.message)
+        if (action === 'error') throw new Error('elicitation unavailable')
         return { action }
       })
     }

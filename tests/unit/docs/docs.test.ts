@@ -166,6 +166,7 @@ describe('docker', () => {
     const svc = c.services['discord-mcp']!
     expect(svc.ports).toEqual(['127.0.0.1:8787:8787'])
     expect(svc.env_file).toBe('.env')
+    expect((svc as { restart: string }).restart).toBe('on-failure:3')
     expect(svc.volumes).toContain('./data:/data')
   })
   it('docker config example parses and binds 0.0.0.0 with a /data database', async () => {
@@ -177,5 +178,9 @@ describe('docker', () => {
   })
   it('README has a Run with Docker section', () => {
     expect(read('README.md')).toContain('Run with Docker')
+  })
+  it('documents config errors, exit code 78 and the missing config troubleshooting entry', () => {
+    const readme = read('README.md')
+    for (const s of ['78', 'EX_CONFIG', 'chown 1000:1000', 'DISCORD_MCP_GUILD_ID', 'mkdir -p data && cp config.docker.example.yaml data/config.yaml', 'it does not exist']) expect(readme).toContain(s)
   })
 })

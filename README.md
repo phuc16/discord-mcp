@@ -246,11 +246,21 @@ SIGINT, SIGTERM and SIGHUP close the gateway, the HTTP server and the database c
 
 The repository ships a `Dockerfile` (multi-stage, `node:22-slim`, non-root user, `NODE_ENV=production`), a `.dockerignore`, `docker-compose.yml` and `config.docker.example.yaml`. Secrets are never baked into the image: pass them as environment variables (`DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL`). `.env` is excluded from the build context.
 
-Prepare a data directory holding the config and the SQLite database:
+Quick start, in this order:
 
-```bash
-mkdir -p data && cp config.docker.example.yaml data/config.yaml
-```
+1. Create the data directory and the config, then edit the guild id in `data/config.yaml` to your server's id:
+
+   ```bash
+   mkdir -p data && cp config.docker.example.yaml data/config.yaml
+   ```
+
+2. On Linux make `./data` writable by the container user (uid 1000): `sudo chown 1000:1000 data`.
+3. Create `.env` with `DISCORD_BOT_TOKEN`, plus `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `PUBLIC_BASE_URL` (the container runs with `--http`).
+4. Build and start (below).
+
+Shortcut: if `/data/config.yaml` is missing and `DISCORD_MCP_GUILD_ID` is set, a minimal config is generated from the environment (that guild at tier `DISCORD_MCP_MAX_TIER`, default `write`; `http.host: 0.0.0.0`; database next to the config). Use a real `config.yaml` for anything beyond a first try.
+
+Configuration errors (missing or unreadable config, unwritable data directory, missing environment variables) print one message and exit with code 78 (EX_CONFIG), distinct from runtime crashes (exit 1). The compose file uses `restart: on-failure:3`, so a configuration mistake stops after three attempts instead of restart-looping forever; change it to `unless-stopped` if you prefer always-restart for runtime crashes.
 
 The Docker example sets `http.host: 0.0.0.0` (required inside a container, since the default is `127.0.0.1`) and `database_path: /data/discord-mcp.db`. Set `http.trust_proxy` to the number of reverse proxies in front of the container (for example `1`) when you run behind one; keep `false` otherwise. The container runs as uid 1000, so `data` must be writable by it (`chown 1000 data`).
 
@@ -439,6 +449,8 @@ Tier: **R** read, **W** write, **D** destructive (dry-run preview then `confirm_
 | HTTP 401 with `WWW-Authenticate` | Not logged in or the token expired or was revoked: re-authenticate with `/mcp`. |
 | Login ends with `access_denied` | None of your guilds qualify (Administrator or Manage Server, bot present, allowlisted). |
 | `redirect_uri` mismatch at Discord | `<PUBLIC_BASE_URL>/callback` must be registered exactly in the portal. |
+| `cannot read config file /data/config.yaml: it does not exist` (container exits with code 78) | `./data` is mounted but empty. Run `mkdir -p data && cp config.docker.example.yaml data/config.yaml`, edit the guild id, `chown 1000:1000 data` on Linux, and restart. "not readable" means the file is not readable by uid 1000. Or set `DISCORD_MCP_GUILD_ID` to generate a minimal config. |
+| `database directory ... is not writable` (exit 78) | The data directory is not writable by the container user: `sudo chown 1000:1000 data`. |
 | `database ... is already in use` at startup | Another discord-mcp process is using that database. Stop it, or use a different `database_path`. |
 | No events arrive | Check `/healthz` for `gateway: ready`, that the guild is in `config.yaml`, and the intents. A `gap` event marks a reconnect. |
 

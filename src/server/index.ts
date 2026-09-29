@@ -1,6 +1,7 @@
 import { createDiscordOAuthPort, createDiscordPort, createGateway } from '../discord/index.js'
 import { createLogger } from '../cli/logger.js'
 import { loadConfig } from '../cli/config-loader.js'
+import { ConfigError, checkWritableDir } from '../cli/errors.js'
 import { openStore } from '../store/index.js'
 import { startHttp } from './http.js'
 import type { HttpHandle } from './http.js'
@@ -61,18 +62,19 @@ export const launch = async (input: RuntimeInput, opts: { http: boolean; onExit?
 
 const requireEnv = (env: NodeJS.ProcessEnv, name: string): string => {
   const value = env[name]
-  if (!value) throw new Error(`missing env var ${name}`)
+  if (!value) throw new ConfigError(`missing env var ${name}`)
   return value
 }
 
 export const startServer = async (opts: { configPath: string; http: boolean }): Promise<void> => {
   const env = process.env
-  const config = loadConfig(opts.configPath)
+  const config = loadConfig(opts.configPath, env)
   const logger = createLogger({ level: env.LOG_LEVEL })
   const botToken = requireEnv(env, 'DISCORD_BOT_TOKEN')
   const clientId = opts.http ? requireEnv(env, 'DISCORD_CLIENT_ID') : ''
   const clientSecret = opts.http ? requireEnv(env, 'DISCORD_CLIENT_SECRET') : ''
   if (opts.http) requireEnv(env, 'PUBLIC_BASE_URL')
+  checkWritableDir(config.database_path)
   const store = openStore(config.database_path)
   const input: RuntimeInput = {
     config,

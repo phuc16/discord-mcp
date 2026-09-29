@@ -23,7 +23,7 @@ export const runCheck = async (opts: CheckOptions): Promise<CheckResult> => {
   const problems: string[] = []
   let guildIds: string[] = []
   try {
-    guildIds = Object.keys(loadConfig(opts.configPath).guilds)
+    guildIds = Object.keys(loadConfig(opts.configPath, env).guilds)
   } catch (err) {
     problems.push((err as Error).message)
   }

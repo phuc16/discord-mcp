@@ -30,11 +30,14 @@ export interface OAuthRepo {
   saveClient(c: OAuthClient): void
   getClient(id: string): OAuthClient | null
   listClients(): OAuthClient[]
+  countClients(): number
   savePending(p: PendingAuth): void
   consumePending(state: string, now: number): PendingAuth | null
   saveCode(c: AuthCode): void
   consumeCode(codeHash: string, now: number): AuthCode | null
   peekCode(codeHash: string, now: number): AuthCode | null
+  recordCodeFamily(codeHash: string, familyId: string): void
+  familyForUsedCode(codeHash: string): string | null
   saveSession(s: Session): void
   getByAccessHash(h: string): Session | null
   getByRefreshHash(h: string): Session | null
@@ -150,6 +153,10 @@ export const createOAuthRepo = (db: Db): OAuthRepo => {
       return r ? toClient(r) : null
     },
     listClients: () => (db.prepare('SELECT * FROM oauth_clients ORDER BY created_at, client_id').all() as Record<string, unknown>[]).map(toClient),
+    countClients: () => (one<{ n: number }>('SELECT COUNT(*) AS n FROM oauth_clients') as { n: number }).n,
+    recordCodeFamily: (codeHash, familyId) =>
+      void db.prepare('INSERT OR REPLACE INTO oauth_code_families (code_hash, family_id) VALUES (?, ?)').run(codeHash, familyId),
+    familyForUsedCode: (codeHash) => one<{ family_id: string }>('SELECT family_id FROM oauth_code_families WHERE code_hash = ?', codeHash)?.family_id ?? null,
     savePending: (p) =>
       void db
         .prepare('INSERT INTO oauth_states (state, client_id, redirect_uri, code_challenge, client_state, scopes, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)')

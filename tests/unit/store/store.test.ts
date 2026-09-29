@@ -114,6 +114,26 @@ describe('EventRepo', () => {
   })
 })
 
+describe('EventRepo recent and gap', () => {
+  const ev = (type: 'message_create' | 'member_join' | 'gap', guildId = '1') => ({ guildId, type, at: '2026-01-01T00:00:00Z', data: {} })
+  it('recent returns newest n ascending', () => {
+    const s = openStore(':memory:')
+    const all = Array.from({ length: 150 }, () => s.events.append(ev('message_create')))
+    s.events.append(ev('message_create', '2'))
+    const r = s.events.recent('1', 100)
+    expect(r).toHaveLength(100)
+    expect(r[0]!.id).toBe(all[50]!.id)
+    expect(r[99]!.id).toBe(all[149]!.id)
+  })
+  it('type filter still returns gap events', () => {
+    const s = openStore(':memory:')
+    s.events.append(ev('message_create'))
+    const g = s.events.append(ev('gap'))
+    const j = s.events.append(ev('member_join'))
+    expect(s.events.since({ guildId: '1', sinceId: 0, types: ['member_join'], limit: 10 }).map((e) => e.id)).toEqual([g.id, j.id])
+  })
+})
+
 describe('RuleRepo', () => {
   const rule = (o: Partial<Rule> = {}): Rule => ({
     id: 'r1',
@@ -161,6 +181,64 @@ describe('RuleRepo', () => {
     s.rules.setCooldownUntil('r1', 99)
     expect(s.rules.getCooldownUntil('r1')).toBe(99)
     expect(s.rules.getCooldownUntil('missing')).toBe(0)
+  })
+})
+
+describe('migration safety', () => {
+  it('refuses a newer schema', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'store-'))
+    const path = join(dir, 'n.db')
+    try {
+      openStore(path).close()
+      const raw = new Database(path)
+      raw.prepare("UPDATE meta SET value = '999' WHERE key = 'schema_version'").run()
+      raw.close()
+      expect(() => openStore(path)).toThrow(/newer/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('pruneExpired and helpers', () => {
+  it('removes expired state and keeps live rows', () => {
+    const s = openStore(':memory:')
+    const pend = (state: string, expiresAt: number) => ({ state, clientId: 'c', redirectUri: 'r', codeChallenge: 'x', clientState: null, scopes: [], expiresAt })
+    s.oauth.savePending(pend('old', 50))
+    s.oauth.savePending(pend('new', 500))
+    const code = (h: string, expiresAt: number) => ({ codeHash: h, clientId: 'c', redirectUri: 'r', codeChallenge: 'x', userId: 'u', userName: 'n', guilds: {}, expiresAt })
+    s.oauth.saveCode(code('oldc', 50))
+    s.oauth.saveCode(code('newc', 500))
+    const sess = (familyId: string, refreshExpiresAt: number, revoked = false) => ({
+      familyId, accessHash: `a${familyId}`, refreshHash: `r${familyId}`, clientId: 'c', userId: 'u', userName: 'n', guilds: {}, accessExpiresAt: 10, refreshExpiresAt, revoked,
+    })
+    s.oauth.saveSession(sess('exp', 50))
+    s.oauth.saveSession(sess('rev', 500, true))
+    s.oauth.saveSession(sess('live', 500))
+    s.oauth.rotateRefresh({ oldRefreshHash: 'rexp', newRefreshHash: 'rexp2', newAccessHash: 'aexp2', accessExpiresAt: 10, refreshExpiresAt: 50, guilds: {}, now: 1 })
+    s.oauth.recordCodeFamily('oldc', 'exp')
+    s.confirmations.create({ tokenHash: 'ct', inputHash: 'i', principalKey: 'p', tool: 't', expiresAt: 50 })
+    s.confirmations.create({ tokenHash: 'cl', inputHash: 'i', principalKey: 'p', tool: 't', expiresAt: 500 })
+    s.pruneExpired(100)
+    expect(s.oauth.consumePending('old', 1)).toBeNull()
+    expect(s.oauth.consumePending('new', 1)).not.toBeNull()
+    expect(s.oauth.peekCode('newc', 1)).not.toBeNull()
+    expect(s.oauth.getByRefreshHash('rexp2')).toBeNull()
+    expect(s.oauth.getByRefreshHash('rrev')).toBeNull()
+    expect(s.oauth.getByRefreshHash('rlive')).not.toBeNull()
+    expect(s.oauth.rotateRefresh({ oldRefreshHash: 'rexp', newRefreshHash: 'z', newAccessHash: 'z', accessExpiresAt: 1, refreshExpiresAt: 1, guilds: {}, now: 1 })).toBeNull()
+    expect(s.oauth.familyForUsedCode('oldc')).toBeNull()
+    expect(s.confirmations.consume({ tokenHash: 'ct', inputHash: 'i', principalKey: 'p', tool: 't', now: 1 })).toBe('invalid')
+    expect(s.confirmations.consume({ tokenHash: 'cl', inputHash: 'i', principalKey: 'p', tool: 't', now: 1 })).toBe('ok')
+  })
+  it('counts clients and maps used codes to families', () => {
+    const s = openStore(':memory:')
+    expect(s.oauth.countClients()).toBe(0)
+    s.oauth.saveClient({ clientId: 'c', clientSecretHash: null, redirectUris: [], clientName: 'n', createdAt: 't' })
+    expect(s.oauth.countClients()).toBe(1)
+    expect(s.oauth.familyForUsedCode('h')).toBeNull()
+    s.oauth.recordCodeFamily('h', 'fam')
+    expect(s.oauth.familyForUsedCode('h')).toBe('fam')
   })
 })
 

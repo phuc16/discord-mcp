@@ -4,6 +4,7 @@ import type { Db } from './db.js'
 export interface EventRepo {
   append(e: NewEvent): NormalizedEvent
   since(q: { guildId: string; sinceId: number; types?: EventType[]; limit: number }): NormalizedEvent[]
+  recent(guildId: string, limit: number): NormalizedEvent[]
   prune(o: { olderThanIso: string; maxRows: number }): number
   latestId(): number
 }
@@ -23,6 +24,7 @@ export const createEventRepo = (db: Db): EventRepo => {
   const dropOld = db.prepare('DELETE FROM events WHERE at < ?')
   const trim = db.prepare('DELETE FROM events WHERE id NOT IN (SELECT id FROM events ORDER BY id DESC LIMIT ?)')
   const latest = db.prepare('SELECT COALESCE(MAX(id), 0) AS id FROM events')
+  const recentStmt = db.prepare('SELECT * FROM events WHERE guild_id = ? ORDER BY id DESC LIMIT ?')
   const prune = db.transaction((o: { olderThanIso: string; maxRows: number }) => dropOld.run(o.olderThanIso).changes + trim.run(o.maxRows).changes)
   return {
     append(e) {
@@ -31,10 +33,12 @@ export const createEventRepo = (db: Db): EventRepo => {
     },
     since(q) {
       const types = q.types?.length ? q.types : undefined
-      const marks = types ? ` AND type IN (${types.map(() => '?').join(',')})` : ''
+      const marks = types ? ` AND (type = 'gap' OR type IN (${types.map(() => '?').join(',')}))` : ''
       const sql = `SELECT * FROM events WHERE guild_id = ? AND id > ?${marks} ORDER BY id ASC LIMIT ?`
       return (db.prepare(sql).all(q.guildId, q.sinceId, ...(types ?? []), q.limit) as Row[]).map(toEvent)
     },
+    recent: (guildId, limit) =>
+      (recentStmt.all(guildId, limit) as Row[]).reverse().map(toEvent),
     prune: (o) => prune(o),
     latestId: () => (latest.get() as { id: number }).id,
   }

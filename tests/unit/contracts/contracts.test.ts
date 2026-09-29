@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ConfigSchema, McpToolError, canonicalJson, isTier, maxTier, minTier, tierRank } from '../../../src/contracts/index.js'
+import { ConfigSchema, EVENT_TYPES, McpToolError, canonicalJson, isTier, maxTier, minTier, tierRank } from '../../../src/contracts/index.js'
 
 describe('tiers', () => {
   it('ranks read < write < destructive', () => {
@@ -44,6 +44,17 @@ describe('ConfigSchema', () => {
     expect(parsed.events.retention_hours).toBe(72)
     expect(parsed.http.port).toBe(8787)
     expect(parsed.tools.deny).toEqual([])
+  })
+  it('defaults new security fields', () => {
+    const parsed = ConfigSchema.parse({ guilds: valid.guilds })
+    expect(parsed.http).toMatchObject({ host: '127.0.0.1', trust_proxy: false, allowed_redirect_uris: [], max_clients: 1000, max_sessions_per_principal: 10 })
+    expect(parsed.safety.allow_token_confirm).toBe(false)
+    expect(parsed.rules).toEqual({ max_per_guild: 50, min_cooldown_sec: 1 })
+    expect(ConfigSchema.parse({ guilds: valid.guilds, http: { trust_proxy: 2 } }).http.trust_proxy).toBe(2)
+    expect(ConfigSchema.parse({ guilds: valid.guilds, http: { trust_proxy: '10.0.0.0/8' } }).http.trust_proxy).toBe('10.0.0.0/8')
+  })
+  it('knows member_update', () => {
+    expect(EVENT_TYPES).toContain('member_update')
   })
   it('rejects bad tier and non-snowflake guild id', () => {
     expect(() => ConfigSchema.parse({ guilds: { '123456789012345678': { max_tier: 'root' } } })).toThrow()

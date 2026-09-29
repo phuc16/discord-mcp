@@ -109,4 +109,15 @@ CREATE TABLE oauth_refresh_history (
 );
 `,
   },
+  {
+    version: 2,
+    sql: `
+CREATE INDEX oauth_sessions_refresh_expiry ON oauth_sessions (refresh_expires_at);
+CREATE TABLE oauth_code_families (
+  code_hash TEXT PRIMARY KEY,
+  family_id TEXT NOT NULL
+);
+CREATE INDEX oauth_code_families_family ON oauth_code_families (family_id);
+`,
+  },
 ]

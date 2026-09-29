@@ -1,8 +1,15 @@
 import { z } from 'zod'
 import type { AnyToolDef } from '../contracts/index.js'
+import type { Payload } from '../contracts/index.js'
 import { defineTool, defined, guildId, snowflake } from './define.js'
 
 type AuditFilter = { user_id?: string; action_type?: number; limit?: number; before?: string }
+const ENTRY_FIELDS = ['id', 'user_id', 'target_id', 'action_type', 'reason', 'changes', 'options'] as const
+const pick = (o: Payload, keys: readonly string[]): Payload => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]))
+const project = (raw: Payload): Payload => ({
+  audit_log_entries: Array.isArray(raw.audit_log_entries) ? (raw.audit_log_entries as Payload[]).map((e) => pick(e, ENTRY_FIELDS)) : [],
+  users: Array.isArray(raw.users) ? (raw.users as Payload[]).map((u) => pick(u, ['id', 'username', 'bot'])) : [],
+})
 const limit = z.number().int().min(1).max(100).optional()
 
 export const auditLogList = defineTool({
@@ -13,7 +20,7 @@ export const auditLogList = defineTool({
   input: { guild_id: guildId, limit, before: snowflake.optional() },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => ({
-    data: await ctx.discord.listAuditLog(i.guild_id, defined({ limit: i.limit, before: i.before }) as AuditFilter),
+    data: project(await ctx.discord.listAuditLog(i.guild_id, defined({ limit: i.limit, before: i.before }) as AuditFilter)),
   }),
 })
 
@@ -25,7 +32,7 @@ export const auditLogByUser = defineTool({
   input: { guild_id: guildId, user_id: snowflake, limit },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => ({
-    data: await ctx.discord.listAuditLog(i.guild_id, defined({ user_id: i.user_id, limit: i.limit }) as AuditFilter),
+    data: project(await ctx.discord.listAuditLog(i.guild_id, defined({ user_id: i.user_id, limit: i.limit }) as AuditFilter)),
   }),
 })
 
@@ -37,7 +44,7 @@ export const auditLogByAction = defineTool({
   input: { guild_id: guildId, action_type: z.number().int().min(1), limit },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => ({
-    data: await ctx.discord.listAuditLog(i.guild_id, defined({ action_type: i.action_type, limit: i.limit }) as AuditFilter),
+    data: project(await ctx.discord.listAuditLog(i.guild_id, defined({ action_type: i.action_type, limit: i.limit }) as AuditFilter)),
   }),
 })
 

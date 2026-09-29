@@ -76,6 +76,18 @@ describe('roles_bulk_assign', () => {
     const ctx = makeCtx({ discord: { listRoles } })
     await expect(runPreview(t('roles_bulk_assign'), ctx, { guild_id: G, role_id: id('8'), user_ids: ids(1) })).rejects.toMatchObject({ code: 'not_found' })
   })
+  it('de-duplicates user ids in handler and preview', async () => {
+    const users = ids(2)
+    const ctx = makeCtx({ discord: { listRoles, addMemberRole: async () => undefined } })
+    await run(t('roles_bulk_assign'), ctx, { guild_id: G, role_id: R, user_ids: [users[0], users[0], users[1]] })
+    expect(ctx.calls.filter((c) => c.method === 'addMemberRole')).toHaveLength(2)
+    const p = await runPreview(t('roles_bulk_assign'), makeCtx({ discord: { listRoles } }), { guild_id: G, role_id: R, user_ids: [users[0], users[0]] })
+    expect(p.affected).toEqual({ members: 1 })
+  })
+  it('errors when every assignment failed so the audit is not ok', async () => {
+    const ctx = makeCtx({ discord: { listRoles, addMemberRole: async () => { throw new McpToolError('missing_permissions', 'no') } } })
+    await expect(run(t('roles_bulk_assign'), ctx, { guild_id: G, role_id: R, user_ids: ids(2) })).rejects.toBeInstanceOf(McpToolError)
+  })
   it('handler reports partial failures sequentially', async () => {
     const users = ids(3)
     const ctx = makeCtx({
@@ -105,11 +117,13 @@ describe('roles_delete', () => {
     expect(p.affected).toEqual({ members: 2 })
     expect(ctx.calls.map((c) => c.method)).toEqual(['listRoles', 'listMembers'])
   })
-  it('preview pages members up to 1000', async () => {
-    const page = Array.from({ length: 1000 }, (_, i) => ({ id: String(100000000000000000n + BigInt(i)), roles: [] }))
+  it('preview scan is bounded and reports at_least', async () => {
+    const page = Array.from({ length: 1000 }, (_, i) => ({ id: id('1'), user: { id: String(100000000000000000n + BigInt(i)) }, roles: [R] }))
     const ctx = makeCtx({ discord: { listRoles, listMembers: async () => page } })
-    await runPreview(t('roles_delete'), ctx, { guild_id: G, role_id: R })
-    expect(ctx.calls.filter((c) => c.method === 'listMembers')).toHaveLength(1)
+    const p = await runPreview(t('roles_delete'), ctx, { guild_id: G, role_id: R })
+    expect(ctx.calls.filter((c) => c.method === 'listMembers')).toHaveLength(5)
+    expect(p.details).toMatchObject({ at_least: true, scanned: 5000 })
+    expect(p.summary).toContain('at least')
   })
   it('handler deletes with reason', async () => {
     const ctx = makeCtx({ discord: { deleteRole: async () => undefined } })

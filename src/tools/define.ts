@@ -96,3 +96,5 @@ export const assertTagsNotDropped = (current: unknown, next: readonly { id?: str
     throw new McpToolError('invalid_input', `this update would delete tags: ${dropped.join(', ')}; pass allow_drop_tags: true to confirm`)
   }
 }
+
+export const memberUserId = (m: Dto): string => (m.user as { id?: string } | undefined)?.id ?? m.id

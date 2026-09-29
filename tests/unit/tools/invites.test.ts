@@ -17,6 +17,14 @@ describe('invites', () => {
     await run(t('invites_create'), ctx, { guild_id: G, channel_id: C, max_age: 3600, max_uses: 5, temporary: true, unique: true })
     expect(ctx.calls[1]).toEqual({ method: 'createInvite', args: [C, { max_age: 3600, max_uses: 5, temporary: true, unique: true }, reason] })
   })
+  it('invites_create defaults to bounded age and uses and rejects zero', async () => {
+    const ctx = makeCtx({ discord: { getChannel: async () => ({ id: C, guild_id: G }), createInvite: async () => invite } })
+    await run(t('invites_create'), ctx, { guild_id: G, channel_id: C })
+    expect(ctx.calls[1]?.args[1]).toEqual({ max_age: 86400, max_uses: 10 })
+    const s = t('invites_create').input
+    expect(s.safeParse({ guild_id: G, channel_id: C, max_age: 0 }).success).toBe(false)
+    expect(s.safeParse({ guild_id: G, channel_id: C, max_uses: 0 }).success).toBe(false)
+  })
   it('invites_create rejects foreign channel and out-of-range values', async () => {
     const ctx = makeCtx({ discord: { getChannel: async () => ({ id: C, guild_id: OTHER_G }), createInvite: async () => invite } })
     await expect(run(t('invites_create'), ctx, { guild_id: G, channel_id: C })).rejects.toMatchObject({ code: 'not_found' })

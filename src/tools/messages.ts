@@ -23,35 +23,44 @@ const authorOf = (m: Dto): { id?: string; username?: string } => (m.author ?? {}
 const scanChannel = async (
   ctx: ToolContext,
   channelId: string,
-  opts: { before?: string; maxScan: number; want?: number; keep?: (m: Dto) => boolean },
-): Promise<{ matched: Dto[]; scanned: number }> => {
+  opts: { before?: string; maxScan: number; want?: number; keep?: (m: Dto) => boolean; stopBefore?: number },
+): Promise<{ matched: Dto[]; scanned: number; hitCutoff: boolean }> => {
   const matched: Dto[] = []
   let scanned = 0
   let cursor = opts.before
+  let hitCutoff = false
   while (scanned < opts.maxScan && (opts.want === undefined || matched.length < opts.want)) {
     const limit = Math.min(PAGE, opts.maxScan - scanned)
     const page = await ctx.discord.listMessages(channelId, defined({ limit, before: cursor }) as { limit: number; before?: string })
     for (const m of page) {
+      if (opts.stopBefore !== undefined && createdAtMs(m.id) <= opts.stopBefore) {
+        hitCutoff = true
+        break
+      }
       scanned += 1
       if (!opts.keep || opts.keep(m)) matched.push(m)
       if (opts.want !== undefined && matched.length >= opts.want) break
     }
     const last = page[page.length - 1]
-    if (page.length < limit || !last) break
+    if (hitCutoff || page.length < limit || !last) break
     cursor = last.id
   }
-  return { matched, scanned }
+  return { matched, scanned, hitCutoff }
 }
 
-const purgeSet = async (ctx: ToolContext, i: { channel_id: string; limit: number; before?: string; user_id?: string; contains?: string }) => {
+const purgeSet = async (ctx: ToolContext, i: { channel_id: string; limit: number; before: string; user_id?: string; contains?: string }) => {
   const needle = i.contains?.toLowerCase()
   const keep = (m: Dto): boolean =>
     (!i.user_id || authorOf(m).id === i.user_id) &&
     (!needle || (typeof m.content === 'string' && m.content.toLowerCase().includes(needle)))
-  const { matched, scanned } = await scanChannel(ctx, i.channel_id, { before: i.before, maxScan: PURGE_SCAN_CAP, want: i.limit, keep })
-  const cutoff = Date.now() - BULK_MAX_AGE_MS
-  const deletable = matched.filter((m) => createdAtMs(m.id) > cutoff)
-  return { deletable, skippedOld: matched.length - deletable.length, scanned }
+  const { matched, scanned, hitCutoff } = await scanChannel(ctx, i.channel_id, {
+    before: i.before,
+    maxScan: PURGE_SCAN_CAP,
+    want: i.limit,
+    keep,
+    stopBefore: Date.now() - BULK_MAX_AGE_MS,
+  })
+  return { deletable: matched, scanned, hitCutoff }
 }
 
 export const messagesList = defineTool({
@@ -147,34 +156,34 @@ export const messagesPurge = defineTool({
   name: 'messages_purge',
   group: 'messages',
   tier: 'destructive',
-  description: 'Bulk delete up to 1000 recent messages, optionally by author or text; messages older than 14 days are skipped (destructive).',
+  description: 'Bulk delete up to 1000 messages older than the required `before` message id (exclusive; take the newest id from messages_list so the set is pinned and later messages are never touched), optionally by author or text; scanning stops at messages older than 14 days (destructive).',
   input: {
     ...channel,
     limit: z.number().int().min(1).max(1000),
-    before: snowflake.optional(),
+    before: snowflake,
     user_id: snowflake.optional(),
     contains: z.string().min(1).max(200).optional(),
   },
   guildFrom: (i) => i.guild_id,
   preview: async (ctx, i) => {
     await assertChannelInGuild(ctx, i.channel_id, i.guild_id)
-    const { deletable, skippedOld, scanned } = await purgeSet(ctx, i)
+    const { deletable, scanned, hitCutoff } = await purgeSet(ctx, i)
     return {
-      summary: `Delete ${deletable.length} messages in channel ${i.channel_id}`,
+      summary: `Delete ${deletable.length} messages older than ${i.before} in channel ${i.channel_id}`,
       affected: { messages: deletable.length },
-      details: { scanned, skipped_old: skippedOld },
+      details: { scanned, before: i.before, stopped_at_14_day_cutoff: hitCutoff },
     }
   },
   handler: async (ctx, i) => {
     await assertChannelInGuild(ctx, i.channel_id, i.guild_id)
-    const { deletable, skippedOld } = await purgeSet(ctx, i)
+    const { deletable, hitCutoff } = await purgeSet(ctx, i)
     const ids = deletable.map((m) => m.id)
     for (let at = 0; at < ids.length; at += PAGE) {
       const chunk = ids.slice(at, at + PAGE)
       if (chunk.length === 1 && chunk[0]) await ctx.discord.deleteMessage(i.channel_id, chunk[0], auditReason(ctx))
       else await ctx.discord.bulkDeleteMessages(i.channel_id, chunk, auditReason(ctx))
     }
-    return { data: { deleted: ids.length, skipped_old: skippedOld } }
+    return { data: { deleted: ids.length, stopped_at_14_day_cutoff: hitCutoff } }
   },
 })
 

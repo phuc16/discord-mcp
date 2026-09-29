@@ -19,6 +19,8 @@ const oldId = (): string => String(((BigInt(Date.now() - 20 * 86400000) - epoch)
 const makeChannelMessages = (n: number, author = (i: number) => (i % 2 === 0 ? U : id('8'))): Dto[] =>
   Array.from({ length: n }, (_, i) => ({ id: recentId(i + 1), content: `msg ${i}`, author: { id: author(i), username: 'u' } }))
 
+const FAR = String(((BigInt(Date.now() + 86400000) - epoch) << 22n))
+
 const pagedList = (all: Dto[]) => async (_c: string, q: { limit: number; before?: string }): Promise<Dto[]> => {
   const start = q.before ? all.findIndex((m) => m.id === q.before) + 1 : 0
   return all.slice(start, start + q.limit)
@@ -31,7 +33,7 @@ describe('guild binding', () => {
     ['messages_send', { content: 'hi' }],
     ['messages_edit', { message_id: M, content: 'x' }],
     ['messages_delete', { message_id: M }],
-    ['messages_purge', { limit: 5 }],
+    ['messages_purge', { limit: 5, before: M }],
     ['messages_pin', { message_id: M }],
     ['messages_unpin', { message_id: M }],
     ['messages_list_pins', {}],
@@ -47,7 +49,7 @@ describe('guild binding', () => {
   })
   it.each(['messages_delete', 'messages_purge', 'reactions_clear'])('%s preview rejects foreign channel', async (name) => {
     const ctx = makeCtx({ discord: foreign })
-    const extra = name === 'messages_purge' ? { limit: 5 } : { message_id: M }
+    const extra = name === 'messages_purge' ? { limit: 5, before: M } : { message_id: M }
     await expect(runPreview(t(name), ctx, { guild_id: G, channel_id: C, ...extra })).rejects.toMatchObject({ code: 'not_found' })
   })
 })
@@ -132,14 +134,14 @@ describe('messages_delete', () => {
 describe('messages_purge', () => {
   it('rejects limit 1001 and 0', () => {
     const s = t('messages_purge').input
-    expect(s.safeParse({ guild_id: G, channel_id: C, limit: 1001 }).success).toBe(false)
-    expect(s.safeParse({ guild_id: G, channel_id: C, limit: 0 }).success).toBe(false)
-    expect(s.safeParse({ guild_id: G, channel_id: C, limit: 1000 }).success).toBe(true)
+    expect(s.safeParse({ guild_id: G, channel_id: C, before: FAR, limit: 1001 }).success).toBe(false)
+    expect(s.safeParse({ guild_id: G, channel_id: C, before: FAR, limit: 0 }).success).toBe(false)
+    expect(s.safeParse({ guild_id: G, channel_id: C, before: FAR, limit: 1000 }).success).toBe(true)
   })
   it('preview scans across pages and reports count without mutating', async () => {
     const all = makeChannelMessages(250)
     const ctx = makeCtx({ discord: { ...inGuild, listMessages: pagedList(all) } })
-    const p = await runPreview(t('messages_purge'), ctx, { guild_id: G, channel_id: C, limit: 220 })
+    const p = await runPreview(t('messages_purge'), ctx, { guild_id: G, channel_id: C, before: FAR, limit: 220 })
     expect(p.affected).toEqual({ messages: 220 })
     const methods = new Set(ctx.calls.map((c) => c.method))
     expect(methods).toEqual(new Set(['getChannel', 'listMessages']))
@@ -156,33 +158,50 @@ describe('messages_purge', () => {
         },
       },
     })
-    const out = await run(t('messages_purge'), ctx, { guild_id: G, channel_id: C, limit: 220 })
-    expect(out).toEqual({ deleted: 220, skipped_old: 0 })
+    const out = await run(t('messages_purge'), ctx, { guild_id: G, channel_id: C, before: FAR, limit: 220 })
+    expect(out).toEqual({ deleted: 220, stopped_at_14_day_cutoff: false })
     expect(deleted.map((d) => d.length)).toEqual([100, 100, 20])
     expect(deleted.flat()).toEqual(all.slice(0, 220).map((m) => m.id))
   })
   it('filters by user_id and contains', async () => {
     const all = makeChannelMessages(40)
     const ctx = makeCtx({ discord: { ...inGuild, listMessages: pagedList(all) } })
-    const byUser = await runPreview(t('messages_purge'), ctx, { guild_id: G, channel_id: C, limit: 1000, user_id: U })
+    const byUser = await runPreview(t('messages_purge'), ctx, { guild_id: G, channel_id: C, before: FAR, limit: 1000, user_id: U })
     expect(byUser.affected).toEqual({ messages: 20 })
-    const byText = await runPreview(t('messages_purge'), ctx, { guild_id: G, channel_id: C, limit: 1000, contains: 'MSG 1' })
+    const byText = await runPreview(t('messages_purge'), ctx, { guild_id: G, channel_id: C, before: FAR, limit: 1000, contains: 'MSG 1' })
     expect(byText.affected).toEqual({ messages: 11 })
   })
-  it('skips messages older than 14 days', async () => {
-    const all: Dto[] = [...makeChannelMessages(3), { id: oldId(), content: 'old', author: { id: U } }]
+  it('requires before', () => {
+    expect(t('messages_purge').input.safeParse({ guild_id: G, channel_id: C, limit: 5 }).success).toBe(false)
+  })
+  it('preview equals execution when newer messages arrive in between', async () => {
+    const all = makeChannelMessages(10)
+    const pinned = all[0]!.id
+    const arrived: Dto = { id: String(BigInt(pinned) + 1000n), content: 'new', author: { id: U } }
+    let feed = all
+    const deleted: string[][] = []
+    const ctx = makeCtx({ discord: { ...inGuild, listMessages: async (_c, q) => feed.filter((m) => !q.before || BigInt(m.id) < BigInt(q.before)).slice(0, q.limit), bulkDeleteMessages: async (_c, ids) => { deleted.push(ids) } } })
+    const input = { guild_id: G, channel_id: C, before: String(BigInt(pinned) + 1n), limit: 100 }
+    const p = await runPreview(t('messages_purge'), ctx, input)
+    feed = [arrived, ...all]
+    await run(t('messages_purge'), ctx, input)
+    expect(deleted.flat()).toEqual(all.map((m) => m.id))
+    expect(p.affected).toEqual({ messages: 10 })
+  })
+  it('stops scanning at the 14 day cutoff', async () => {
+    const all: Dto[] = [...makeChannelMessages(3), { id: oldId(), content: 'old', author: { id: U } }, { id: String(BigInt(oldId()) - 5n), content: 'older', author: { id: U } }]
     const calls: string[][] = []
     const ctx = makeCtx({ discord: { ...inGuild, listMessages: pagedList(all), bulkDeleteMessages: async (_c, ids) => { calls.push(ids) } } })
-    const p = await runPreview(t('messages_purge'), ctx, { guild_id: G, channel_id: C, limit: 10 })
+    const p = await runPreview(t('messages_purge'), ctx, { guild_id: G, channel_id: C, before: FAR, limit: 10 })
     expect(p.affected).toEqual({ messages: 3 })
-    expect(p.details).toMatchObject({ skipped_old: 1 })
-    expect(await run(t('messages_purge'), ctx, { guild_id: G, channel_id: C, limit: 10 })).toEqual({ deleted: 3, skipped_old: 1 })
+    expect(p.details).toMatchObject({ scanned: 3, stopped_at_14_day_cutoff: true })
+    expect(await run(t('messages_purge'), ctx, { guild_id: G, channel_id: C, before: FAR, limit: 10 })).toEqual({ deleted: 3, stopped_at_14_day_cutoff: true })
     expect(calls).toEqual([all.slice(0, 3).map((m) => m.id)])
   })
   it('uses single delete for a lone message', async () => {
     const all = makeChannelMessages(1)
     const ctx = makeCtx({ discord: { ...inGuild, listMessages: pagedList(all), deleteMessage: async () => undefined } })
-    expect(await run(t('messages_purge'), ctx, { guild_id: G, channel_id: C, limit: 5 })).toEqual({ deleted: 1, skipped_old: 0 })
+    expect(await run(t('messages_purge'), ctx, { guild_id: G, channel_id: C, before: FAR, limit: 5 })).toEqual({ deleted: 1, stopped_at_14_day_cutoff: false })
     expect(ctx.calls.at(-1)?.method).toBe('deleteMessage')
   })
 })

@@ -99,7 +99,9 @@ describe('roles_bulk_assign', () => {
         },
       },
     })
-    expect(await run(t('roles_bulk_assign'), ctx, { guild_id: G, role_id: R, user_ids: users })).toEqual({
+    const res = await t('roles_bulk_assign').handler(ctx, t('roles_bulk_assign').input.parse({ guild_id: G, role_id: R, user_ids: users }))
+    expect(res.partial).toBe(true)
+    expect(res.data).toEqual({
       ok: [users[0]],
       failed: [
         { user_id: users[1], code: 'missing_permissions' },

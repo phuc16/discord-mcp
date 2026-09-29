@@ -33,6 +33,7 @@ export const modTimeout = defineTool({
   input: { guild_id: guildId, user_id: snowflake, duration_seconds: z.number().int().min(1).max(2419200) },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id)
     const until = new Date(Date.now() + i.duration_seconds * 1000).toISOString()
     return {
       data: await ctx.discord.updateMember(i.guild_id, i.user_id, { communication_disabled_until: until }, auditReason(ctx)),
@@ -47,9 +48,10 @@ export const modRemoveTimeout = defineTool({
   description: 'Remove a member timeout (write).',
   input: { guild_id: guildId, user_id: snowflake },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, i) => ({
-    data: await ctx.discord.updateMember(i.guild_id, i.user_id, { communication_disabled_until: null }, auditReason(ctx)),
-  }),
+  handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id)
+    return { data: await ctx.discord.updateMember(i.guild_id, i.user_id, { communication_disabled_until: null }, auditReason(ctx)) }
+  },
 })
 
 export const modKick = defineTool({
@@ -59,11 +61,12 @@ export const modKick = defineTool({
   description: 'Kick a member from the guild (destructive).',
   input: { guild_id: guildId, user_id: snowflake, reason },
   guildFrom: (i) => i.guild_id,
-  preview: async (ctx, i) => ({
-    summary: `Kick ${await describeUser(ctx, i.guild_id, i.user_id)}`,
-    affected: { members: 1 },
-  }),
+  preview: async (ctx, i) => {
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id)
+    return { summary: `Kick ${await describeUser(ctx, i.guild_id, i.user_id)}`, affected: { members: 1 } }
+  },
   handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id)
     await ctx.discord.kickMember(i.guild_id, i.user_id, reasonWith(ctx, i.reason))
     return { data: { user_id: i.user_id } }
   },
@@ -76,12 +79,16 @@ export const modBan = defineTool({
   description: 'Ban a user from the guild, optionally deleting recent messages (destructive).',
   input: { guild_id: guildId, user_id: snowflake, delete_message_seconds: deleteSeconds, reason },
   guildFrom: (i) => i.guild_id,
-  preview: async (ctx, i) => ({
-    summary: `Ban ${await describeUser(ctx, i.guild_id, i.user_id)}`,
-    affected: { users: 1 },
-    details: { delete_message_seconds: i.delete_message_seconds ?? 0 },
-  }),
+  preview: async (ctx, i) => {
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id)
+    return {
+      summary: `Ban ${await describeUser(ctx, i.guild_id, i.user_id)}`,
+      affected: { users: 1 },
+      details: { delete_message_seconds: i.delete_message_seconds ?? 0 },
+    }
+  },
   handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id)
     await ctx.discord.banMember(i.guild_id, i.user_id, defined({ delete_message_seconds: i.delete_message_seconds }), reasonWith(ctx, i.reason))
     return { data: { user_id: i.user_id } }
   },
@@ -111,9 +118,11 @@ export const modBulkBan = defineTool({
     const userIds = uniq(i.user_ids)
     return { summary: `Ban ${userIds.length} users`, affected: { users: userIds.length }, details: { user_ids: userIds } }
   },
-  handler: async (ctx, i) => ({
-    data: await ctx.discord.bulkBan(i.guild_id, uniq(i.user_ids), defined({ delete_message_seconds: i.delete_message_seconds }), reasonWith(ctx, i.reason)),
-  }),
+  handler: async (ctx, i) => {
+    const userIds = uniq(i.user_ids)
+    for (const userId of userIds) await ctx.guards.assertCanActOnMember(i.guild_id, userId)
+    return { data: await ctx.discord.bulkBan(i.guild_id, userIds, defined({ delete_message_seconds: i.delete_message_seconds }), reasonWith(ctx, i.reason)) }
+  },
 })
 
 export const modListBans = defineTool({

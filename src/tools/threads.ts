@@ -29,7 +29,8 @@ export const threadsListArchived = defineTool({
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, { guild_id, channel_id, ...q }) => {
     await assertChannelInGuild(ctx, channel_id, guild_id)
-    return { data: { items: await ctx.discord.listArchivedThreads(channel_id, defined(q) as typeof q) } }
+    const { threads, has_more } = await ctx.discord.listArchivedThreads(channel_id, defined(q) as typeof q)
+    return { data: { items: threads, has_more } }
   },
 })
 

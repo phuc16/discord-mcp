@@ -1,4 +1,4 @@
-import type { DiscordPort, Principal, Services, ToolContext } from '../../../src/contracts/index.js'
+import type { DiscordPort, Guards, Principal, Services, ToolContext } from '../../../src/contracts/index.js'
 
 export const G = '1'.repeat(18)
 export const OTHER_G = '9'.repeat(18)
@@ -12,6 +12,13 @@ export interface RecordedCall {
 export type TestCtx = ToolContext & { calls: RecordedCall[] }
 
 export const principal: Principal = { kind: 'stdio', userId: null, userName: 'tester', guilds: {} }
+
+export const allowAllGuards: Guards = {
+  assertCanGrantPermissions: () => undefined,
+  assertCanPlaceRole: async () => undefined,
+  assertCanActOnRole: async () => undefined,
+  assertCanActOnMember: async () => undefined,
+}
 
 const noServices = new Proxy({}, {
   get: (_t, prop) => {
@@ -45,6 +52,7 @@ export const makeCtx = (
     correlationId: 'corr-1',
     logger: { info: noop, warn: noop, error: noop, debug: noop },
     services: noServices,
+    guards: allowAllGuards,
     ...overrides,
     discord,
     calls,

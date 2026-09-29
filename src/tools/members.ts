@@ -44,9 +44,10 @@ export const membersUpdateNick = defineTool({
   description: 'Set or clear a member nickname (write).',
   input: { guild_id: guildId, user_id: snowflake, nick: z.string().max(32).nullable() },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, i) => ({
-    data: await ctx.discord.updateMember(i.guild_id, i.user_id, { nick: i.nick }, auditReason(ctx)),
-  }),
+  handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id, { allowSelf: true })
+    return { data: await ctx.discord.updateMember(i.guild_id, i.user_id, { nick: i.nick }, auditReason(ctx)) }
+  },
 })
 
 export const membersAddRole = defineTool({
@@ -57,6 +58,8 @@ export const membersAddRole = defineTool({
   input: { guild_id: guildId, user_id: snowflake, role_id: snowflake },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnRole(i.guild_id, i.role_id)
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id, { allowSelf: true })
     await ctx.discord.addMemberRole(i.guild_id, i.user_id, i.role_id, auditReason(ctx))
     return { data: { user_id: i.user_id, role_id: i.role_id } }
   },
@@ -70,6 +73,8 @@ export const membersRemoveRole = defineTool({
   input: { guild_id: guildId, user_id: snowflake, role_id: snowflake },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnRole(i.guild_id, i.role_id)
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id, { allowSelf: true })
     await ctx.discord.removeMemberRole(i.guild_id, i.user_id, i.role_id, auditReason(ctx))
     return { data: { user_id: i.user_id, role_id: i.role_id } }
   },
@@ -84,6 +89,7 @@ export const membersMoveVoice = defineTool({
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
     await assertChannelInGuild(ctx, i.channel_id, i.guild_id)
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id, { allowSelf: true })
     return { data: await ctx.discord.updateMember(i.guild_id, i.user_id, { channel_id: i.channel_id }, auditReason(ctx)) }
   },
 })
@@ -95,9 +101,10 @@ export const membersDisconnectVoice = defineTool({
   description: 'Disconnect a member from voice (write).',
   input: { guild_id: guildId, user_id: snowflake },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, i) => ({
-    data: await ctx.discord.updateMember(i.guild_id, i.user_id, { channel_id: null }, auditReason(ctx)),
-  }),
+  handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id, { allowSelf: true })
+    return { data: await ctx.discord.updateMember(i.guild_id, i.user_id, { channel_id: null }, auditReason(ctx)) }
+  },
 })
 
 export const membersTools: AnyToolDef[] = [

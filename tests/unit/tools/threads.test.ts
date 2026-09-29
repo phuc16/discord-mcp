@@ -18,8 +18,8 @@ describe('thread listing', () => {
     expect(await run(t('threads_list_active'), ctx, { guild_id: G })).toEqual({ items: [{ id: T }] })
   })
   it('threads_list_archived forwards query after guild check', async () => {
-    const ctx = makeCtx({ discord: { ...inGuild, listArchivedThreads: async () => [{ id: T }] } })
-    await run(t('threads_list_archived'), ctx, { guild_id: G, channel_id: C, kind: 'private', limit: 10 })
+    const ctx = makeCtx({ discord: { ...inGuild, listArchivedThreads: async () => ({ threads: [{ id: T }], has_more: true }) } })
+    expect(await run(t('threads_list_archived'), ctx, { guild_id: G, channel_id: C, kind: 'private', limit: 10 })).toEqual({ items: [{ id: T }], has_more: true })
     expect(ctx.calls[1]).toEqual({ method: 'listArchivedThreads', args: [C, { kind: 'private', limit: 10 }] })
   })
   it('threads_list_archived rejects foreign channel and bad limit', async () => {

@@ -112,6 +112,7 @@ export const channelsSetPermissions = defineTool({
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
     await assertChannelInGuild(ctx, i.channel_id, i.guild_id)
+    ctx.guards.assertCanGrantPermissions(i.guild_id, i.allow)
     await ctx.discord.setChannelPermissions(i.channel_id, i.overwrite_id, { type: i.type, allow: i.allow, deny: i.deny }, auditReason(ctx))
     return { data: { channel_id: i.channel_id, overwrite_id: i.overwrite_id } }
   },
@@ -161,6 +162,8 @@ export const channelsClone = defineTool({
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
     const src = await assertChannelInGuild(ctx, i.channel_id, i.guild_id)
+    const overwrites = Array.isArray(src.permission_overwrites) ? (src.permission_overwrites as { allow?: string }[]) : []
+    for (const o of overwrites) if (o.allow) ctx.guards.assertCanGrantPermissions(i.guild_id, o.allow)
     const spec = defined({
       name: i.name ?? src.name,
       type: src.type,

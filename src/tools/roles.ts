@@ -47,9 +47,10 @@ export const rolesCreate = defineTool({
   description: 'Create a role in a guild (write).',
   input: { guild_id: guildId, ...roleFields },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, { guild_id, ...spec }) => ({
-    data: await ctx.discord.createRole(guild_id, defined(spec), auditReason(ctx)),
-  }),
+  handler: async (ctx, { guild_id, ...spec }) => {
+    if (spec.permissions !== undefined) ctx.guards.assertCanGrantPermissions(guild_id, spec.permissions)
+    return { data: await ctx.discord.createRole(guild_id, defined(spec), auditReason(ctx)) }
+  },
 })
 
 export const rolesUpdate = defineTool({
@@ -59,9 +60,11 @@ export const rolesUpdate = defineTool({
   description: 'Update a role of a guild (write).',
   input: { guild_id: guildId, role_id: snowflake, ...roleFields },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, { guild_id, role_id, ...patch }) => ({
-    data: await ctx.discord.updateRole(guild_id, role_id, defined(patch), auditReason(ctx)),
-  }),
+  handler: async (ctx, { guild_id, role_id, ...patch }) => {
+    if (patch.permissions !== undefined) ctx.guards.assertCanGrantPermissions(guild_id, patch.permissions)
+    await ctx.guards.assertCanActOnRole(guild_id, role_id)
+    return { data: await ctx.discord.updateRole(guild_id, role_id, defined(patch), auditReason(ctx)) }
+  },
 })
 
 export const rolesReorder = defineTool({
@@ -74,7 +77,13 @@ export const rolesReorder = defineTool({
     positions: z.array(z.object({ id: snowflake, position: z.number().int().min(0) })).min(1).max(50),
   },
   guildFrom: (i) => i.guild_id,
-  handler: async (ctx, i) => ({ data: { items: await ctx.discord.reorderRoles(i.guild_id, i.positions) } }),
+  handler: async (ctx, i) => {
+    for (const p of i.positions) {
+      await ctx.guards.assertCanActOnRole(i.guild_id, p.id)
+      await ctx.guards.assertCanPlaceRole(i.guild_id, p.position)
+    }
+    return { data: { items: await ctx.discord.reorderRoles(i.guild_id, i.positions) } }
+  },
 })
 
 export const rolesAssign = defineTool({
@@ -85,6 +94,8 @@ export const rolesAssign = defineTool({
   input: { guild_id: guildId, user_id: snowflake, role_id: snowflake },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnRole(i.guild_id, i.role_id)
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id, { allowSelf: true })
     await ctx.discord.addMemberRole(i.guild_id, i.user_id, i.role_id, auditReason(ctx))
     return { data: { user_id: i.user_id, role_id: i.role_id } }
   },
@@ -98,6 +109,8 @@ export const rolesRemove = defineTool({
   input: { guild_id: guildId, user_id: snowflake, role_id: snowflake },
   guildFrom: (i) => i.guild_id,
   handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnRole(i.guild_id, i.role_id)
+    await ctx.guards.assertCanActOnMember(i.guild_id, i.user_id, { allowSelf: true })
     await ctx.discord.removeMemberRole(i.guild_id, i.user_id, i.role_id, auditReason(ctx))
     return { data: { user_id: i.user_id, role_id: i.role_id } }
   },
@@ -116,10 +129,12 @@ export const rolesBulkAssign = defineTool({
     return { summary: `Assign role ${String(role.name)} (${i.role_id}) to ${count} members`, affected: { members: count } }
   },
   handler: async (ctx, i) => {
+    await ctx.guards.assertCanActOnRole(i.guild_id, i.role_id)
     const ok: string[] = []
     const failed: { user_id: string; code: string }[] = []
     for (const userId of new Set(i.user_ids)) {
       try {
+        await ctx.guards.assertCanActOnMember(i.guild_id, userId, { allowSelf: true })
         await ctx.discord.addMemberRole(i.guild_id, userId, i.role_id, auditReason(ctx))
         ok.push(userId)
       } catch (e) {
@@ -127,7 +142,7 @@ export const rolesBulkAssign = defineTool({
       }
     }
     if (ok.length === 0) throw new McpToolError('internal', `role assignment failed for all ${failed.length} members: ${failed.map((f) => `${f.user_id}=${f.code}`).join(', ')}`)
-    return { data: { ok, failed } }
+    return failed.length > 0 ? { data: { ok, failed }, partial: true } : { data: { ok, failed } }
   },
 })
 

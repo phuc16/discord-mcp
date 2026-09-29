@@ -62,6 +62,10 @@ claude mcp add --transport http discord https://mcp.example.com/mcp
 
 Then run `/mcp` in Claude Code and authenticate with Discord. Only guilds where you are an administrator or hold Manage Server, and where the bot is present and allowed by the config, become available.
 
-## 9. Smoke test
+## 9. Live events over HTTP
+
+HTTP mode is stateless: each request gets a fresh MCP server, so `resources/subscribe` notifications for `discord://guild/{guild_id}/events` are delivered over stdio only. Over HTTP, poll with the `events_poll` tool using the last seen event id.
+
+## 10. Smoke test
 
 Follow the [smoke checklist](smoke-checklist.md) against a throwaway guild before pointing the server at a real one.

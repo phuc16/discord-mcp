@@ -25,6 +25,14 @@ describe('getting-started', () => {
   })
 })
 
+describe('http limitation', () => {
+  it('documents events_poll fallback', () => {
+    const doc = read('docs/getting-started.md')
+    expect(doc).toContain('events_poll')
+    expect(doc).toContain('stateless')
+  })
+})
+
 describe('relative links', () => {
   it.each(files)('%s links resolve', (file) => {
     const text = read(file)

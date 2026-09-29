@@ -195,6 +195,8 @@ describe('OAuthRepo', () => {
     s.oauth.saveClient(c)
     expect(s.oauth.getClient('c')).toEqual(c)
     expect(s.oauth.getClient('z')).toBeNull()
+    s.oauth.saveClient({ ...c, clientId: 'd', createdAt: 'u' })
+    expect(s.oauth.listClients().map((x) => x.clientId)).toEqual(['c', 'd'])
   })
   it('pending is single use and expires', () => {
     const s = openStore(':memory:')

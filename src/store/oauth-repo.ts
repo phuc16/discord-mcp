@@ -29,6 +29,7 @@ export type RotateResult = { session: Session } | { reuse: true; familyId: strin
 export interface OAuthRepo {
   saveClient(c: OAuthClient): void
   getClient(id: string): OAuthClient | null
+  listClients(): OAuthClient[]
   savePending(p: PendingAuth): void
   consumePending(state: string, now: number): PendingAuth | null
   saveCode(c: AuthCode): void
@@ -69,6 +70,14 @@ const toSession = (r: SessionRow): Session => ({
   accessExpiresAt: r.access_expires_at,
   refreshExpiresAt: r.refresh_expires_at,
   revoked: r.revoked === 1,
+})
+
+const toClient = (r: Record<string, unknown>): OAuthClient => ({
+  clientId: r.client_id as string,
+  clientSecretHash: r.client_secret_hash as string | null,
+  redirectUris: JSON.parse(r.redirect_uris as string),
+  clientName: r.client_name as string,
+  createdAt: r.created_at as string,
 })
 
 export const createOAuthRepo = (db: Db): OAuthRepo => {
@@ -138,15 +147,9 @@ export const createOAuthRepo = (db: Db): OAuthRepo => {
         .run(c.clientId, c.clientSecretHash, JSON.stringify(c.redirectUris), c.clientName, c.createdAt),
     getClient(id) {
       const r = one<Record<string, unknown>>('SELECT * FROM oauth_clients WHERE client_id = ?', id)
-      if (!r) return null
-      return {
-        clientId: r.client_id as string,
-        clientSecretHash: r.client_secret_hash as string | null,
-        redirectUris: JSON.parse(r.redirect_uris as string),
-        clientName: r.client_name as string,
-        createdAt: r.created_at as string,
-      }
+      return r ? toClient(r) : null
     },
+    listClients: () => (db.prepare('SELECT * FROM oauth_clients ORDER BY created_at, client_id').all() as Record<string, unknown>[]).map(toClient),
     savePending: (p) =>
       void db
         .prepare('INSERT INTO oauth_states (state, client_id, redirect_uri, code_challenge, client_state, scopes, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)')

@@ -41,7 +41,7 @@ describe('createGateway', () => {
     expect(gateway.status()).toBe('disconnected')
     await gateway.start()
     expect(client.loggedIn).toBe('tok')
-    client.emit('ready')
+    client.emit('clientReady')
     client.emit('shardDisconnect')
     client.emit('shardResume')
     expect(statuses).toEqual(['connecting', 'ready', 'disconnected', 'ready'])
@@ -51,8 +51,8 @@ describe('createGateway', () => {
   it('does not repeat identical statuses', async () => {
     const { client, gateway, statuses } = setup()
     await gateway.start()
-    client.emit('ready')
     client.emit('clientReady')
+    client.emit('shardReady', 0)
     expect(statuses).toEqual(['connecting', 'ready'])
   })
 
@@ -166,7 +166,7 @@ describe('createGateway', () => {
       throw new Error('boom')
     })
     await gateway.start()
-    expect(() => client.emit('ready')).not.toThrow()
+    expect(() => client.emit('clientReady')).not.toThrow()
     expect(logs.length).toBeGreaterThan(0)
   })
 
@@ -194,7 +194,14 @@ describe('createGateway', () => {
   it('a first-ever ready has no gap info', async () => {
     const { client, gateway, infos } = setup()
     await gateway.start()
-    client.emit('ready')
+    client.emit('clientReady')
     expect(infos.at(-1)).toBeUndefined()
+  })
+
+  it('does not listen to the deprecated ready event', async () => {
+    const { client, gateway } = setup()
+    await gateway.start()
+    expect(client.listenerCount('ready')).toBe(0)
+    expect(client.listenerCount('clientReady')).toBe(1)
   })
 })

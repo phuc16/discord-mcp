@@ -39,7 +39,7 @@ const stderrLogger: GatewayLogger = {
 
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
-const READY_EVENTS = ['clientReady', 'ready', 'shardReady']
+const READY_EVENTS = ['clientReady', 'shardReady']
 const RESUME_EVENTS = ['shardResume']
 const DISCONNECT_EVENTS = ['shardDisconnect']
 

@@ -48,7 +48,7 @@ describe('FakeDiscordPort guild and channels', () => {
     const d = new FakeDiscordPort()
     d.seedGuild(G1)
     await d.getGuild(G1)
-    expect(d.calls.at(-1)).toEqual({ method: 'getGuild', args: [G1] })
+    expect(d.calls.at(-1)).toMatchObject({ method: 'getGuild', args: [G1], ok: true })
   })
 })
 

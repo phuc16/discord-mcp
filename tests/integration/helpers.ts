@@ -41,3 +41,8 @@ export const principals = {
   banAndManageGuild: { kind: 'user', userId: '13', userName: 'bm', guilds: { [GUILD_A]: '36', [GUILD_B]: '36', [GUILD_C]: '36' } },
   notInGuild: { kind: 'user', userId: '14', userName: 'out', guilds: {} },
 } satisfies Record<string, Principal>
+
+export const succeededMutations = async (discord: FakeDiscordPort): Promise<string[]> => {
+  await new Promise((r) => setTimeout(r, 0))
+  return discord.calls.filter((c) => c.ok === true && !READ_PREFIXES.some((p) => c.method.startsWith(p))).map((c) => c.method)
+}

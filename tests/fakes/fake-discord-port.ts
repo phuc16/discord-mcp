@@ -33,7 +33,7 @@ export class FakeDiscordPort implements DiscordPort {
   memberPermissions = new Map<string, string>()
   banOptions = new Map<string, { delete_message_seconds?: number }>()
   auditEntries = new Map<string, Payload[]>()
-  calls: { method: string; args: unknown[] }[] = []
+  calls: { method: string; args: unknown[]; ok?: boolean }[] = []
 
   constructor() {
     for (const name of Object.getOwnPropertyNames(FakeDiscordPort.prototype)) {
@@ -42,8 +42,18 @@ export class FakeDiscordPort implements DiscordPort {
       if (typeof original !== 'function') continue
       const bound = original.bind(this) as (...a: unknown[]) => unknown
       ;(this as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
-        this.calls.push({ method: name, args })
-        return bound(...args)
+        const entry: { method: string; args: unknown[]; ok?: boolean } = { method: name, args }
+        this.calls.push(entry)
+        const result = bound(...args) as Promise<unknown>
+        result.then(
+          () => {
+            entry.ok = true
+          },
+          () => {
+            entry.ok = false
+          },
+        )
+        return result
       }
     }
   }

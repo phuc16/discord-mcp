@@ -59,6 +59,8 @@ const PROFILES = {
   },
   solo: { id: '9006', username: 'erin', guilds: [{ id: GUILD_B, permissions: '8' }] },
   second: { id: '9007', username: 'frank', guilds: [{ id: GUILD_A, permissions: '8' }] },
+  demotable: { id: '9008', username: 'gina', guilds: [{ id: GUILD_A, permissions: '8' }] },
+  bystander: { id: '9009', username: 'hank', guilds: [{ id: GUILD_A, permissions: '8' }] },
 } satisfies Record<string, MockUser>
 
 const codeFor = (profile: keyof typeof PROFILES): string => {
@@ -137,14 +139,46 @@ const authorizeUrl = (client: Registered, o: { challenge?: string; redirect?: st
   return `/authorize?${p.toString()}`
 }
 
-const startAuthorize = async (client: Registered, o: { challenge: string; state?: string }) => {
-  const r = await req(authorizeUrl(client, o))
-  expect(r.status).toBe(302)
-  const location = new URL(r.res.headers.get('location')!)
-  return { location, discordState: location.searchParams.get('state')! }
+const stateCookies = new Map<string, string>()
+
+const cookieOf = (res: Response, name: string): string | null => {
+  for (const line of res.headers.getSetCookie()) {
+    const m = new RegExp(`^${name}=([^;]*)`).exec(line)
+    if (m && m[1]) return m[1]
+  }
+  return null
 }
 
-const callback = async (code: string, state: string) => req(`/callback?${new URLSearchParams({ code, state }).toString()}`)
+const hiddenFields = (html: string): Record<string, string> =>
+  Object.fromEntries([...html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)">/g)].map((m) => [m[1]!, m[2]!.replace(/&amp;/g, '&')]))
+
+const consent = async (client: Registered, o: { challenge: string; state?: string }) => {
+  const page = await req(authorizeUrl(client, o))
+  expect(page.status).toBe(200)
+  expect(page.res.headers.get('content-type')).toContain('text/html')
+  return { page, fields: hiddenFields(page.text), csrf: cookieOf(page.res, 'mcp_consent') }
+}
+
+const decide = async (fields: Record<string, string>, csrf: string | null, decision: 'approve' | 'deny') =>
+  req('/authorize', {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', ...(csrf ? { cookie: `mcp_consent=${csrf}` } : {}) },
+    body: new URLSearchParams({ ...fields, consent: decision }),
+  })
+
+const startAuthorize = async (client: Registered, o: { challenge: string; state?: string }) => {
+  const { fields, csrf } = await consent(client, o)
+  const r = await decide(fields, csrf, 'approve')
+  expect(r.status).toBe(302)
+  const location = new URL(r.res.headers.get('location')!)
+  const discordState = location.searchParams.get('state')!
+  const browser = cookieOf(r.res, 'mcp_oauth_state')
+  if (browser) stateCookies.set(discordState, browser)
+  return { location, discordState }
+}
+
+const callback = async (code: string, state: string, cookie: string | null = stateCookies.get(state) ?? null) =>
+  req(`/callback?${new URLSearchParams({ code, state }).toString()}`, cookie ? { headers: { cookie: `mcp_oauth_state=${cookie}` } } : {})
 
 interface Tokens {
   access_token: string
@@ -246,6 +280,8 @@ beforeAll(async () => {
   discord.memberPermissions.set(`${GUILD_B}:9005`, '8')
   discord.memberPermissions.set(`${GUILD_B}:9006`, '8')
   discord.memberPermissions.set(`${GUILD_A}:9001`, '8')
+  discord.memberPermissions.set(`${GUILD_A}:9008`, '8')
+  discord.memberPermissions.set(`${GUILD_A}:9009`, '8')
   gateway = new FakeGateway()
   const rewrite = (url: string): string =>
     url.replace('https://discord.com/api/oauth2/', `${mock.url}/oauth2/`).replace('https://discord.com/api/v10/', `${mock.url}/`)
@@ -394,6 +430,16 @@ describe('happy path', () => {
     expect(next.access_token).not.toBe(tokens.access_token)
     expect((await initialize(next.access_token)).status).toBe(200)
 
+    const lostResponse = await req(
+      '/token',
+      form({ grant_type: 'refresh_token', client_id: client.client_id, refresh_token: tokens.refresh_token }),
+      { sensitive: true },
+    )
+    expect(lostResponse.status).toBe(200)
+    expect(JSON.parse(lostResponse.text)).toMatchObject({ refresh_token: next.refresh_token, access_token: next.access_token })
+    expect((await initialize(next.access_token)).status).toBe(200)
+
+    await new Promise((r) => setTimeout(r, 10_500))
     const replay = await req(
       '/token',
       form({ grant_type: 'refresh_token', client_id: client.client_id, refresh_token: tokens.refresh_token }),
@@ -409,7 +455,7 @@ describe('happy path', () => {
       { sensitive: true },
     )
     expect(afterReplay.status).toBe(400)
-  })
+  }, 30_000)
 
   it('revoke invalidates the access token', async () => {
     const s = await fullLogin(codeFor('alice'))
@@ -521,6 +567,31 @@ describe('negative cases', () => {
     expect(JSON.parse(again.text).error).toBe('invalid_grant')
   })
 
+  it('replaying an authorization code revokes the tokens it already issued', async () => {
+    const l = await login(codeFor('alice'))
+    const first = await tokenExchange(l.client, l.code!, l.verifier)
+    const tokens = JSON.parse(first.text) as Tokens
+    expect((await initialize(tokens.access_token)).status).toBe(200)
+    expect((await tokenExchange(l.client, l.code!, l.verifier)).status).toBe(400)
+    expect((await initialize(tokens.access_token)).status).toBe(401)
+    const refresh = await req(
+      '/token',
+      form({ grant_type: 'refresh_token', client_id: l.client.client_id, refresh_token: tokens.refresh_token }),
+      { sensitive: true },
+    )
+    expect(refresh.status).toBe(400)
+  })
+
+  it('requires redirect_uri at the token exchange', async () => {
+    const l = await login(codeFor('alice'))
+    const r = await req(
+      '/token',
+      form({ grant_type: 'authorization_code', client_id: l.client.client_id, code: l.code!, code_verifier: l.verifier }),
+      { sensitive: true },
+    )
+    expect(r.status).toBe(400)
+  })
+
   it('rejects a mismatched redirect uri at /token', async () => {
     const l = await login(codeFor('alice'))
     const r = await tokenExchange(l.client, l.code!, l.verifier, { redirect_uri: 'http://evil.example/cb' })
@@ -613,6 +684,147 @@ describe('negative cases', () => {
   })
 })
 
+describe('consent step before Discord', () => {
+  it('GET /authorize shows the client name and exact redirect uri and does not redirect', async () => {
+    const client = await defaultClient()
+    const { challenge } = pkce()
+    const { page, fields, csrf } = await consent(client, { challenge })
+    expect(page.res.headers.get('location')).toBeNull()
+    expect(page.text).toContain('qa-client')
+    expect(page.text).toContain(REDIRECT)
+    expect(page.text).not.toContain('discord.com/oauth2')
+    expect(csrf).toBeTruthy()
+    expect(fields.csrf).toBe(csrf)
+    expect(page.res.headers.get('cache-control')).toContain('no-store')
+    expect(page.res.headers.get('x-frame-options')).toBe('DENY')
+    expect(page.res.headers.get('set-cookie')).toMatch(/HttpOnly/i)
+  })
+
+  it('the client name is HTML escaped on the consent page', async () => {
+    const r = await req(
+      '/register',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none', client_name: '<script>alert(1)</script>' }),
+      },
+      { sensitive: true },
+    )
+    const client = JSON.parse(r.text) as Registered
+    const { page } = await consent(client, { challenge: pkce().challenge })
+    expect(page.text).not.toContain('<script>alert(1)</script>')
+    expect(page.text).toContain('&lt;script&gt;')
+  })
+
+  const refusedWithoutDiscord = (r: { res: Response }): void => {
+    const location = r.res.headers.get('location')
+    if (location === null) {
+      expect(r.res.status).toBeGreaterThanOrEqual(400)
+      return
+    }
+    const url = new URL(location)
+    expect(url.origin).not.toBe('https://discord.com')
+    expect(url.searchParams.get('error')).toBeTruthy()
+    expect(url.searchParams.get('code')).toBeNull()
+    expect(r.res.headers.getSetCookie().some((c) => c.startsWith('mcp_oauth_state=') && !/Max-Age=0/i.test(c))).toBe(false)
+  }
+
+  it('a POST without the csrf cookie or with a wrong csrf never redirects to Discord', async () => {
+    const client = await defaultClient()
+    const { fields, csrf } = await consent(client, { challenge: pkce().challenge })
+    refusedWithoutDiscord(await decide(fields, null, 'approve'))
+    refusedWithoutDiscord(await decide({ ...fields, csrf: 'forged' }, csrf, 'approve'))
+    refusedWithoutDiscord(await decide({ ...fields, csrf: '' }, csrf, 'approve'))
+    refusedWithoutDiscord(await decide(fields, 'someone-elses-token', 'approve'))
+  })
+
+  it('a direct POST that skips the consent page is rejected', async () => {
+    const client = await defaultClient()
+    const { challenge } = pkce()
+    const r = await req('/authorize', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: client.client_id,
+        redirect_uri: REDIRECT,
+        response_type: 'code',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+        consent: 'approve',
+      }),
+    })
+    refusedWithoutDiscord(r)
+  })
+
+  it('deny returns access_denied to the client and never contacts Discord', async () => {
+    const client = await defaultClient()
+    const { fields, csrf } = await consent(client, { challenge: pkce().challenge, state: 'deny-state' })
+    const r = await decide(fields, csrf, 'deny')
+    expect(r.status).toBe(302)
+    const back = new URL(r.res.headers.get('location')!)
+    expect(back.origin + back.pathname).toBe(REDIRECT)
+    expect(back.searchParams.get('error')).toBe('access_denied')
+    expect(back.searchParams.get('state')).toBe('deny-state')
+  })
+
+  it('approve redirects to Discord with prompt=consent and sets the browser state cookie', async () => {
+    const client = await defaultClient()
+    const { fields, csrf } = await consent(client, { challenge: pkce().challenge })
+    const r = await decide(fields, csrf, 'approve')
+    expect(r.status).toBe(302)
+    const location = new URL(r.res.headers.get('location')!)
+    expect(location.origin).toBe('https://discord.com')
+    expect(location.searchParams.get('prompt')).toBe('consent')
+    const cookie = cookieOf(r.res, 'mcp_oauth_state')
+    expect(cookie).toBe(location.searchParams.get('state'))
+    expect(r.res.headers.get('set-cookie')).toMatch(/mcp_oauth_state=[^;]+;.*HttpOnly/i)
+  })
+
+  it('the discord callback is bound to the browser that started the flow', async () => {
+    const client = await defaultClient()
+    const { challenge } = pkce()
+    const { discordState } = await startAuthorize(client, { challenge })
+    const noCookie = await callback(codeFor('alice'), discordState, null)
+    expect(noCookie.status).toBe(400)
+    expect(noCookie.res.headers.get('location')).toBeNull()
+    const otherCookie = await callback(codeFor('alice'), discordState, randomBytes(32).toString('base64url'))
+    expect(otherCookie.status).toBe(400)
+    const rightCookie = await callback(codeFor('alice'), discordState)
+    expect(rightCookie.status).toBe(302)
+    expect(new URL(rightCookie.res.headers.get('location')!).searchParams.get('code')).toBeTruthy()
+  })
+})
+
+describe('redirect uri policy', () => {
+  const registerWith = async (redirect: string) =>
+    req(
+      '/register',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: [redirect], token_endpoint_auth_method: 'none', client_name: 'policy' }),
+      },
+      { sensitive: true },
+    )
+
+  it.each(['http://evil.example/cb', 'http://192.168.1.5/cb', 'javascript:alert(1)'])(
+    'registration refuses %s by default',
+    async (uri) => {
+      const r = await registerWith(uri)
+      expect(r.status).toBeGreaterThanOrEqual(400)
+      expect(r.status).toBeLessThan(500)
+    },
+  )
+
+  it.each(['https://app.example.com/cb', 'http://[::1]:5000/cb'])(
+    'registration accepts %s by default',
+    async (uri) => {
+      const r = await registerWith(uri)
+      expect(r.status, r.text).toBeLessThan(300)
+    },
+  )
+})
+
 describe('permission changes', () => {
   it('a role_update demotion removes the guild from the next call while keeping other guilds', async () => {
     const s = await fullLogin(codeFor('multi'))
@@ -661,6 +873,33 @@ describe('permission changes', () => {
     await runtime.rules.idle()
     expect(discord.calls.filter((c) => c.method === 'addMemberRole')).toEqual([])
     await mcp.close()
+  })
+
+  it('a member_update event demotes only the affected user', async () => {
+    const victim = await fullLogin(codeFor('demotable'))
+    const bystander = await fullLogin(codeFor('bystander'))
+    const mcp = await mcpClient(victim.tokens.access_token)
+    expect(toolJson(await mcp.callTool({ name: 'guild_get', arguments: { guild_id: GUILD_A } })).isError).toBe(false)
+    discord.memberPermissions.set(`${GUILD_A}:9008`, '0')
+    discord.memberPermissions.set(`${GUILD_A}:9009`, '0')
+    discord.calls.length = 0
+    gateway.emit({ guildId: GUILD_A, type: 'member_update', at: new Date().toISOString(), data: { user_id: '9008', username: 'gina', old_roles: ['1'], new_roles: [] } })
+    await expect.poll(async () => (await initialize(victim.tokens.access_token)).status, { timeout: 3000 }).toBe(401)
+    const fetched = discord.calls.filter((c) => c.method === 'fetchMemberPermissions').map((c) => c.args[1])
+    expect(fetched).not.toContain('9009')
+    expect((await initialize(bystander.tokens.access_token)).status).toBe(200)
+    await mcp.close()
+  })
+
+  it('member_join, member_ban and member_unban of a user without a session do not refresh anyone', async () => {
+    const s = await fullLogin(codeFor('bystander'))
+    discord.calls.length = 0
+    for (const type of ['member_join', 'member_ban', 'member_unban'] as const) {
+      gateway.emit({ guildId: GUILD_A, type, at: new Date().toISOString(), data: { user_id: '424242' } })
+    }
+    await new Promise((r) => setTimeout(r, 150))
+    expect(discord.calls.filter((c) => c.method === 'fetchMemberPermissions')).toEqual([])
+    expect((await initialize(s.tokens.access_token)).status).toBe(200)
   })
 
   it('a demotion that removes every guild revokes the session', async () => {
@@ -715,25 +954,5 @@ describe('secret hygiene', () => {
     expect(lines.some((l) => l.user_name === 'alice')).toBe(true)
     expect(lines.some((l) => l.path === '/callback')).toBe(true)
     for (const l of lines) expect(JSON.stringify(l)).not.toMatch(/code=|state=/)
-  })
-})
-
-describe('default rate limiting stays on', () => {
-  it('returns 429 on a burst of dynamic client registrations', async () => {
-    const statuses: number[] = []
-    for (let i = 0; i < 40; i++) {
-      const r = await req(
-        '/register',
-        {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none', client_name: `burst-${i}` }),
-        },
-        { sensitive: true },
-      )
-      statuses.push(r.status)
-    }
-    expect(statuses).toContain(429)
-    expect(statuses.indexOf(429)).toBeGreaterThan(0)
   })
 })

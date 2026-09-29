@@ -54,7 +54,7 @@ export const synth = (s: Json): unknown => {
 export const EXTRAS: Record<string, Record<string, unknown>> = {
   messages_send: { content: 'x' },
   messages_edit: { content: 'x' },
-  messages_purge: { before: '999999999999999999' },
+  messages_purge: { before: '9223372036854775807' },
   rules_create_destructive: {
     trigger: { event: 'member_join', filter: {} },
     actions: [{ tool: 'mod_kick', input_template: { user_id: '{{event.data.user_id}}' } }],

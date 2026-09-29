@@ -108,6 +108,10 @@ describe('policy matrix', () => {
     const { harness } = await setup()
     const member = '500000000000000001'
     harness.discord.members.get(GUILD_A)!.set(member, { user: { id: member, username: 'x' }, roles: [] } as never)
+    const rank = await harness.discord.createRole(GUILD_A, { name: 'rank' })
+    await harness.discord.updateRole(GUILD_A, rank.id, { position: 5 })
+    harness.discord.members.get(GUILD_A)!.set('15', { user: { id: '15', username: 'km' }, roles: [rank.id] } as never)
+    harness.discord.calls.length = 0
     const kick = await harness.asPrincipal({ kind: 'user', userId: '15', userName: 'km', guilds: { [GUILD_A]: '34' } })
     const bm = await harness.asPrincipal(principals.banAndManageGuild)
     const mg = await harness.asPrincipal(principals.manageGuildOnly)

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { allTools } from '../../src/tools/index.js'
-import { call, mutatingCalls } from './helpers.js'
+import { GUILD_A, call, mutatingCalls } from './helpers.js'
 import { argsFor, buildWorld } from './world.js'
 import type { World } from './world.js'
 
@@ -41,7 +41,8 @@ describe('destructive tools preview without mutating', () => {
     const done = await call(harness.client, tool.name, { ...args, confirm_token: token })
     expect({ code: done.code, text: done.text.slice(0, 200) }).toMatchObject({ code: null })
     expect(done.isError).toBe(false)
-    expect(mutatingCalls(harness.discord).length).toBeGreaterThan(0)
+    if (tool.name.startsWith('rules_')) expect(harness.store.rules.list(GUILD_A).length).toBeGreaterThan(0)
+    else expect(mutatingCalls(harness.discord).length).toBeGreaterThan(0)
     const replay = await call(harness.client, tool.name, { ...args, confirm_token: token })
     expect(replay.code).toBe('confirm_invalid')
   })

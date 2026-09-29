@@ -105,6 +105,7 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
     discord,
     services: () => holder.services!,
     logger,
+    limits: { maxPerGuild: config.rules.max_per_guild, minCooldownSec: config.rules.min_cooldown_sec },
     now: clock.now,
   })
   const services: Services = { events, rules, audit: createAuditPort({ store, policy }), policy }

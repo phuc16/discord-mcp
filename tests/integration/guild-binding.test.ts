@@ -77,7 +77,7 @@ describe('guild binding', () => {
       ['messages_edit', { guild_id: GUILD_A, channel_id: chB, message_id: msgB.id, content: 'x' }],
       ['messages_pin', { guild_id: GUILD_A, channel_id: chB, message_id: msgB.id }],
       ['messages_crosspost', { guild_id: GUILD_A, channel_id: chB, message_id: msgB.id }],
-      ['messages_purge', { guild_id: GUILD_A, channel_id: chB, limit: 5, before: '999999999999999999' }],
+      ['messages_purge', { guild_id: GUILD_A, channel_id: chB, limit: 5, before: '9223372036854775807' }],
       ['reactions_clear', { guild_id: GUILD_A, channel_id: chB, message_id: msgB.id }],
       ['reactions_add', { guild_id: GUILD_A, channel_id: chB, message_id: msgB.id, emoji: '👍' }],
     ] as const

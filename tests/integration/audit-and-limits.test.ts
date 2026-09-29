@@ -79,7 +79,7 @@ describe('audit', () => {
   })
 })
 
-const FUTURE = '999999999999999999'
+const FUTURE = '9223372036854775807'
 
 describe('bulk limits', () => {
   const bulk = (ch: string) => ({ guild_id: GUILD_A, channel_id: ch, limit: 5, before: FUTURE })

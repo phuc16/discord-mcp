@@ -15,14 +15,14 @@ const OTHER_USER = '500000000000000002'
 
 const setup = async () => {
   const harness = await buildHarness({
-    config: { guilds: { [GUILD_A]: { max_tier: 'destructive' }, [GUILD_B]: { max_tier: 'destructive' } } },
+    config: { safety: { allow_token_confirm: true }, guilds: { [GUILD_A]: { max_tier: 'destructive' }, [GUILD_B]: { max_tier: 'destructive' } } },
   })
   h = harness
   harness.discord.seedGuild(GUILD_A, { members: 0 })
   harness.discord.seedGuild(GUILD_B)
   const role = await harness.discord.createRole(GUILD_A, { name: 'newcomer' })
-  harness.discord.members.get(GUILD_A)!.set(USER, { id: USER, user: { id: USER, username: 'u' }, roles: [] })
-  harness.discord.members.get(GUILD_A)!.set(OTHER_USER, { id: OTHER_USER, user: { id: OTHER_USER, username: 'o' }, roles: [] })
+  harness.discord.members.get(GUILD_A)!.set(USER, { user: { id: USER, username: 'u' }, roles: [] } as never)
+  harness.discord.members.get(GUILD_A)!.set(OTHER_USER, { user: { id: OTHER_USER, username: 'o' }, roles: [] } as never)
   harness.discord.calls.length = 0
   return { harness, role }
 }
@@ -38,6 +38,12 @@ const assignRule = (roleId: string, extra: Record<string, unknown> = {}) => ({
   actions: [{ tool: 'roles_assign', input_template: { user_id: '{{event.data.user_id}}', role_id: roleId } }],
   ...extra,
 })
+
+const createDestructive = async (harness: Harness, body: Record<string, unknown>) => {
+  const first = await call(harness.client, 'rules_create_destructive', body)
+  if (first.code !== 'confirm_required') return first
+  return call(harness.client, 'rules_create_destructive', { ...body, confirm_token: first.details.confirm_token })
+}
 
 const methods = (harness: Harness, name: string) => harness.discord.calls.filter((c) => c.method === name)
 
@@ -68,7 +74,7 @@ describe('rules through the MCP surface', () => {
   it('honours trigger filter and message_contains conditions', async () => {
     const { harness } = await setup()
     const ch = (await harness.discord.createChannel(GUILD_A, { name: 'c', type: 0 })).id
-    await call(harness.client, 'rules_create', {
+    await createDestructive(harness, {
       guild_id: GUILD_A,
       trigger: { event: 'message_create', filter: { channel_id: ch } },
       conditions: [{ op: 'message_contains', text: 'spam' }],
@@ -113,6 +119,7 @@ describe('rules through the MCP surface', () => {
     await emit(harness, 'channel_create', { channel_id: mirror.id })
     await emit(harness, 'channel_create', { channel_id: mirror.id })
     expect(methods(harness, 'createChannel')).toHaveLength(1)
+    harness.clock.advance(5_000)
     const unrelated = await harness.discord.createChannel(GUILD_A, { name: 'other', type: 0 })
     await emit(harness, 'channel_create', { channel_id: unrelated.id })
     expect(methods(harness, 'createChannel').filter((c) => (c.args[1] as { name: string }).name === 'mirror')).toHaveLength(2)
@@ -134,7 +141,7 @@ describe('rules through the MCP surface', () => {
   it('runs an allowed destructive action without a confirm token and audits it', async () => {
     const { harness } = await setup()
     const ch = (await harness.discord.createChannel(GUILD_A, { name: 'c', type: 0 })).id
-    const created = await call(harness.client, 'rules_create', {
+    const created = await createDestructive(harness, {
       guild_id: GUILD_A,
       trigger: { event: 'member_ban', filter: {} },
       actions: [{ tool: 'channels_delete', input_template: { channel_id: ch } }],

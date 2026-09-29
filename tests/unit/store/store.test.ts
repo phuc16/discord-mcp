@@ -264,6 +264,15 @@ describe('OAuthRepo', () => {
     expect(s.oauth.rotateRefresh(rot({ oldRefreshHash: 'nope' }))).toBeNull()
     expect(s.oauth.rotateRefresh(rot({ now: 5000 }))).toBeNull()
   })
+  it('lists active sessions and updates guilds', () => {
+    const s = openStore(':memory:')
+    s.oauth.saveSession(session())
+    s.oauth.saveSession(session({ familyId: 'f2', accessHash: 'a2', refreshHash: 'r2', refreshExpiresAt: 50 }))
+    s.oauth.saveSession(session({ familyId: 'f3', accessHash: 'a3', refreshHash: 'r3', revoked: true }))
+    expect(s.oauth.listActiveSessions(100).map((x) => x.familyId)).toEqual(['f1'])
+    s.oauth.updateSessionGuilds('f1', { '9': '32' })
+    expect(s.oauth.getByAccessHash('a1')?.guilds).toEqual({ '9': '32' })
+  })
   it('revokes by token hash and by family', () => {
     const s = openStore(':memory:')
     s.oauth.saveSession(session())

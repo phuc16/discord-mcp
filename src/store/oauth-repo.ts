@@ -41,6 +41,8 @@ export interface OAuthRepo {
   revokeFamily(familyId: string): void
   revokeByTokenHash(h: string): void
   listSessionsForUser(userId: string): Session[]
+  listActiveSessions(now: number): Session[]
+  updateSessionGuilds(familyId: string, guilds: Record<string, string>): void
 }
 
 interface SessionRow {
@@ -174,6 +176,10 @@ export const createOAuthRepo = (db: Db): OAuthRepo => {
     rotateRefresh: (o) => rotateRefresh(o),
     revokeFamily,
     revokeByTokenHash: (h) => void db.prepare('UPDATE oauth_sessions SET revoked = 1 WHERE access_hash = ? OR refresh_hash = ?').run(h, h),
+    listActiveSessions: (now) =>
+      (db.prepare('SELECT * FROM oauth_sessions WHERE revoked = 0 AND refresh_expires_at > ? ORDER BY family_id').all(now) as SessionRow[]).map(toSession),
+    updateSessionGuilds: (familyId, guilds) =>
+      void db.prepare('UPDATE oauth_sessions SET guilds = ? WHERE family_id = ?').run(JSON.stringify(guilds), familyId),
     listSessionsForUser: (userId) =>
       (db.prepare('SELECT * FROM oauth_sessions WHERE user_id = ? ORDER BY family_id').all(userId) as SessionRow[]).map(toSession),
   }

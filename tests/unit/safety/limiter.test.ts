@@ -3,7 +3,7 @@ import { createBulkLimiter } from '../../../src/safety/limiter.js'
 
 describe('bulk limiter', () => {
   it('allows a burst up to perMinute then rejects', () => {
-    let t = 0
+    const t = 0
     const l = createBulkLimiter({ perMinute: 3, now: () => t })
     for (let i = 0; i < 3; i++) expect(l.take('g')).toEqual({ ok: true })
     const r = l.take('g')

@@ -1,8 +1,8 @@
-import type { GatewayPort, GatewayStatus, NewEvent } from '../../src/contracts/index.js'
+import type { GatewayPort, GatewayStatus, GatewayStatusInfo, NewEvent } from '../../src/contracts/index.js'
 
 export class FakeGateway implements GatewayPort {
   private eventListeners = new Set<(e: NewEvent) => void>()
-  private statusListeners = new Set<(s: GatewayStatus) => void>()
+  private statusListeners = new Set<(s: GatewayStatus, info?: GatewayStatusInfo) => void>()
   private current: GatewayStatus = 'connecting'
 
   async start(): Promise<void> {
@@ -18,7 +18,7 @@ export class FakeGateway implements GatewayPort {
     return () => this.eventListeners.delete(cb)
   }
 
-  onStatus(cb: (s: GatewayStatus) => void): () => void {
+  onStatus(cb: (s: GatewayStatus, info?: GatewayStatusInfo) => void): () => void {
     this.statusListeners.add(cb)
     return () => this.statusListeners.delete(cb)
   }
@@ -39,9 +39,9 @@ export class FakeGateway implements GatewayPort {
     for (const cb of [...this.eventListeners]) cb(e)
   }
 
-  setStatus(s: GatewayStatus): void {
+  setStatus(s: GatewayStatus, info?: GatewayStatusInfo): void {
     if (s === this.current) return
     this.current = s
-    for (const cb of [...this.statusListeners]) cb(s)
+    for (const cb of [...this.statusListeners]) cb(s, info)
   }
 }

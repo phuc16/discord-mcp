@@ -14,7 +14,7 @@ export const run = async (argv: string[], env: NodeJS.ProcessEnv = process.env):
     args: argv,
     allowPositionals: true,
     options: {
-      config: { type: 'string', default: 'config.yaml' },
+      config: { type: 'string' },
       http: { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
       online: { type: 'boolean', default: false },
@@ -49,7 +49,7 @@ export const run = async (argv: string[], env: NodeJS.ProcessEnv = process.env):
   if (values.check) {
     const discordModule = (await import('../discord/index.js')) as unknown as { createDiscordPort: (o: { botToken: string }) => DiscordPort }
     const result = await runCheck({
-      configPath: values.config,
+      configPath: values.config ?? env.DISCORD_MCP_CONFIG ?? 'config.yaml',
       http: values.http,
       online: values.online,
       env,
@@ -60,6 +60,6 @@ export const run = async (argv: string[], env: NodeJS.ProcessEnv = process.env):
     return result.ok ? 0 : 1
   }
   const { startServer } = await import('../server/index.js')
-  await startServer({ configPath: values.config, http: values.http })
+  await startServer({ configPath: values.config ?? env.DISCORD_MCP_CONFIG ?? 'config.yaml', http: values.http })
   return 0
 }

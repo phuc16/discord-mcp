@@ -7,6 +7,8 @@ import { McpToolError } from '../../../src/contracts/index.js'
 const G1 = '100000000000000001'
 const G2 = '100000000000000002'
 
+const uid = (m: { user: unknown }): string => (m.user as { id: string }).id
+
 const rejectsWith = async (p: Promise<unknown>, code: string) => {
   const err = await p.then(
     () => null,
@@ -58,44 +60,44 @@ describe('FakeDiscordPort roles, members, moderation', () => {
     d.seedGuild(G1, { roles: 1, members: 1 })
     const role = await d.createRole(G1, { name: 'r' })
     const [m] = await d.listMembers(G1, { limit: 1 })
-    await d.addMemberRole(G1, m!.id, role.id)
-    expect((await d.getMember(G1, m!.id)).roles).toContain(role.id)
-    await d.removeMemberRole(G1, m!.id, role.id)
-    expect((await d.getMember(G1, m!.id)).roles).not.toContain(role.id)
+    await d.addMemberRole(G1, uid(m!), role.id)
+    expect((await d.getMember(G1, uid(m!))).roles).toContain(role.id)
+    await d.removeMemberRole(G1, uid(m!), role.id)
+    expect((await d.getMember(G1, uid(m!))).roles).not.toContain(role.id)
   })
   it('deleting a role strips it from members', async () => {
     const d = new FakeDiscordPort()
     d.seedGuild(G1, { members: 1 })
     const role = await d.createRole(G1, { name: 'r' })
     const [m] = await d.listMembers(G1, { limit: 1 })
-    await d.addMemberRole(G1, m!.id, role.id)
+    await d.addMemberRole(G1, uid(m!), role.id)
     await d.deleteRole(G1, role.id)
-    expect((await d.getMember(G1, m!.id)).roles).not.toContain(role.id)
+    expect((await d.getMember(G1, uid(m!))).roles).not.toContain(role.id)
   })
   it('ban then list, unban removes', async () => {
     const d = new FakeDiscordPort()
     d.seedGuild(G1, { members: 2 })
     const [m] = await d.listMembers(G1, { limit: 1 })
-    await d.banMember(G1, m!.id, {})
+    await d.banMember(G1, uid(m!), {})
     expect((await d.listBans(G1, { limit: 10 })).length).toBe(1)
-    await rejectsWith(d.getMember(G1, m!.id), 'not_found')
-    await d.unbanMember(G1, m!.id)
+    await rejectsWith(d.getMember(G1, uid(m!)), 'not_found')
+    await d.unbanMember(G1, uid(m!))
     expect((await d.listBans(G1, { limit: 10 })).length).toBe(0)
-    await rejectsWith(d.unbanMember(G1, m!.id), 'not_found')
+    await rejectsWith(d.unbanMember(G1, uid(m!)), 'not_found')
   })
   it('kick removes member', async () => {
     const d = new FakeDiscordPort()
     d.seedGuild(G1, { members: 1 })
     const [m] = await d.listMembers(G1, { limit: 1 })
-    await d.kickMember(G1, m!.id)
-    await rejectsWith(d.getMember(G1, m!.id), 'not_found')
+    await d.kickMember(G1, uid(m!))
+    await rejectsWith(d.getMember(G1, uid(m!)), 'not_found')
   })
   it('bulk ban reports failed users for non-members', async () => {
     const d = new FakeDiscordPort()
     d.seedGuild(G1, { members: 1 })
     const [m] = await d.listMembers(G1, { limit: 1 })
-    const r = await d.bulkBan(G1, [m!.id, '999999999999999999'], {})
-    expect(r.banned_users).toEqual([m!.id])
+    const r = await d.bulkBan(G1, [uid(m!), '999999999999999999'], {})
+    expect(r.banned_users).toEqual([uid(m!)])
     expect(r.failed_users).toEqual(['999999999999999999'])
   })
 })
@@ -166,7 +168,7 @@ describe('FakeDiscordPort messages and misc', () => {
     const em = await d.createEmoji(G1, { name: 'e', image: 'data:image/png;base64,AA==' })
     expect((await d.listEmojis(G1)).map((x) => x.id)).toEqual([em.id])
     await d.deleteEmoji(G1, em.id)
-    const rule = await d.createAutomodRule(G1, { name: 'r' })
+    const rule = await d.createAutomodRule(G1, { name: 'r', event_type: 1, trigger_type: 1, actions: [{ type: 1 }] })
     await d.deleteAutomodRule(G1, rule.id)
     await rejectsWith(d.deleteAutomodRule(G1, rule.id), 'not_found')
     const t = await d.createThread(ch.id, { name: 't' })
@@ -236,5 +238,138 @@ describe('mock Discord server', () => {
     } finally {
       await srv.close()
     }
+  })
+})
+
+const seeded = async () => {
+  const d = new FakeDiscordPort()
+  d.seedGuild(G1, { members: 3 })
+  const text = await d.createChannel(G1, { name: 'text', type: 0 })
+  const forum = await d.createChannel(G1, { name: 'forum', type: 15, available_tags: [{ id: '777', name: 'tag' }] })
+  return { d, text, forum }
+}
+
+describe('FakeDiscordPort uses the real Discord member and ban shape', () => {
+  it('members carry user.id and no top-level id', async () => {
+    const { d } = await seeded()
+    for (const m of await d.listMembers(G1, { limit: 10 })) {
+      expect(Object.keys(m)).not.toContain('id')
+      expect(m.user).toMatchObject({ id: expect.stringMatching(/^\d+$/) })
+    }
+  })
+  it('member updates cannot smuggle an id or user', async () => {
+    const { d } = await seeded()
+    const [m] = await d.listMembers(G1, { limit: 1 })
+    const updated = await d.updateMember(G1, uid(m!), { nick: 'n', id: 'evil', user: { id: 'evil' } })
+    expect(updated.nick).toBe('n')
+    expect(uid(updated as { user: unknown })).toBe(uid(m!))
+    expect(Object.keys(updated)).not.toContain('id')
+  })
+  it('listMembers pages by user id ascending with after', async () => {
+    const { d } = await seeded()
+    const all = await d.listMembers(G1, { limit: 10 })
+    const ids = all.map((m) => BigInt(uid(m)))
+    expect(ids).toEqual([...ids].sort((a, b) => (a < b ? -1 : 1)))
+    const page = await d.listMembers(G1, { limit: 10, after: uid(all[0]!) })
+    expect(page.map(uid)).toEqual(all.slice(1).map(uid))
+  })
+  it('bans list as { user: { id } } ordered numerically with after paging', async () => {
+    const { d } = await seeded()
+    const ids = ['9', '10', '100']
+    for (const id of ids) await d.banMember(G1, id, {})
+    const bans = await d.listBans(G1, { limit: 10 })
+    expect(bans.map((b) => (b.user as { id: string }).id)).toEqual(ids)
+    expect(bans.every((b) => !('id' in b))).toBe(true)
+    expect((await d.listBans(G1, { limit: 10, after: '10' })).map((b) => (b.user as { id: string }).id)).toEqual(['100'])
+  })
+  it('bulk ban with nobody bannable is an error like Discord 500000', async () => {
+    const { d } = await seeded()
+    await rejectsWith(d.bulkBan(G1, ['999999999999999999'], {}), 'invalid_input')
+  })
+  it('ban delete_message_seconds is bounded to 7 days', async () => {
+    const { d } = await seeded()
+    await rejectsWith(d.banMember(G1, '5', { delete_message_seconds: 604_801 }), 'invalid_input')
+  })
+})
+
+describe('FakeDiscordPort validates like Discord', () => {
+  it('stickers need name 2-30, tags, and a png/apng/json data URI', async () => {
+    const { d } = await seeded()
+    const ok = { name: 'sticker', description: 'a sticker', tags: 'x', file: 'data:image/png;base64,AA==' }
+    await rejectsWith(d.createSticker(G1, { ...ok, name: 'x' }), 'invalid_input')
+    await rejectsWith(d.createSticker(G1, { ...ok, tags: '' }), 'invalid_input')
+    await rejectsWith(d.createSticker(G1, { ...ok, file: 'AA==' }), 'invalid_input')
+    await rejectsWith(d.createSticker(G1, { ...ok, file: 'data:image/gif;base64,AA==' }), 'invalid_input')
+    await d.createSticker(G1, ok)
+    await d.createSticker(G1, { ...ok, name: 'lottie', file: 'data:application/json;base64,e30=' })
+    expect(d.stickerUploads.map((u) => [u.field, u.contentType])).toEqual([
+      ['file', 'image/png'],
+      ['file', 'application/json'],
+    ])
+  })
+  it('threads: name, archive duration, parent type and one thread per message', async () => {
+    const { d, text, forum } = await seeded()
+    await rejectsWith(d.createThread(text.id, { name: '' }), 'invalid_input')
+    await rejectsWith(d.createThread(text.id, { name: 't', auto_archive_duration: 5 }), 'invalid_input')
+    await rejectsWith(d.createThread(text.id, { name: 't', type: 13 }), 'invalid_input')
+    await rejectsWith(d.createThread(forum.id, { name: 't' }), 'invalid_input')
+    const msg = await d.sendMessage(text.id, { content: 'hi' })
+    const fromMsg = await d.createThread(text.id, { name: 't', message_id: msg.id })
+    expect(fromMsg.id).toBe(msg.id)
+    expect(fromMsg.type).toBe(11)
+    await rejectsWith(d.createThread(text.id, { name: 'again', message_id: msg.id }), 'invalid_input')
+    const standalone = await d.createThread(text.id, { name: 'solo' })
+    expect(standalone.type).toBe(12)
+    await rejectsWith(d.createThread(text.id, { name: 'pub', type: 10 }), 'invalid_input')
+  })
+  it('thread members must be members of the guild and the target must be a thread', async () => {
+    const { d, text } = await seeded()
+    const t = await d.createThread(text.id, { name: 'solo' })
+    await rejectsWith(d.addThreadMember(t.id, '999999999999999999'), 'not_found')
+    await rejectsWith(d.addThreadMember(text.id, '1'), 'invalid_input')
+  })
+  it('forum posts need a forum channel, message content and known tags', async () => {
+    const { d, text, forum } = await seeded()
+    await rejectsWith(d.createForumPost(text.id, { name: 'p', message: { content: 'x' } }), 'invalid_input')
+    await rejectsWith(d.createForumPost(forum.id, { name: 'p' }), 'invalid_input')
+    await rejectsWith(d.createForumPost(forum.id, { name: 'p', message: { content: 'x' }, applied_tags: ['1'] }), 'invalid_input')
+    const post = await d.createForumPost(forum.id, { name: 'p', message: { content: 'x' }, applied_tags: ['777'] })
+    expect(post.parent_id).toBe(forum.id)
+  })
+  it('archived thread listing validates before and filters by kind', async () => {
+    const { d, text } = await seeded()
+    await rejectsWith(d.listArchivedThreads(text.id, { kind: 'public', before: 'not-a-date' }), 'invalid_input')
+    expect(await d.listArchivedThreads(text.id, { kind: 'public' })).toEqual([])
+  })
+  it('roles validate name, permission string and colour; everyone is immutable in name and position', async () => {
+    const { d } = await seeded()
+    await rejectsWith(d.createRole(G1, { name: '' }), 'invalid_input')
+    await rejectsWith(d.createRole(G1, { name: 'r', permissions: 8 as never }), 'invalid_input')
+    await rejectsWith(d.createRole(G1, { name: 'r', permissions: 'abc' }), 'invalid_input')
+    await rejectsWith(d.createRole(G1, { name: 'r', color: 0x1000000 }), 'invalid_input')
+    await rejectsWith(d.updateRole(G1, G1, { name: 'renamed' }), 'invalid_input')
+    await rejectsWith(d.reorderRoles(G1, [{ id: G1, position: 3 }]), 'invalid_input')
+    await rejectsWith(d.deleteRole(G1, G1), 'invalid_input')
+    const r = await d.createRole(G1, { name: 'r', permissions: '8', position: 99 })
+    expect(r.position).toBe(1)
+  })
+  it('automod validates event/trigger pairing and action metadata', async () => {
+    const { d } = await seeded()
+    const base = { name: 'r', event_type: 1, trigger_type: 1, actions: [{ type: 1 }] }
+    await rejectsWith(d.createAutomodRule(G1, { ...base, event_type: 3 }), 'invalid_input')
+    await rejectsWith(d.createAutomodRule(G1, { ...base, trigger_type: 6 }), 'invalid_input')
+    await rejectsWith(d.createAutomodRule(G1, { ...base, event_type: 2 }), 'invalid_input')
+    await rejectsWith(d.createAutomodRule(G1, { ...base, actions: [{ type: 2 }] }), 'invalid_input')
+    await rejectsWith(d.createAutomodRule(G1, { ...base, actions: [{ type: 3, metadata: { duration_seconds: 99_999_999 } }] }), 'invalid_input')
+    await rejectsWith(d.createAutomodRule(G1, { name: 'r' }), 'invalid_input')
+    await d.createAutomodRule(G1, { ...base, event_type: 2, trigger_type: 6 })
+    const ok = await d.createAutomodRule(G1, { ...base, actions: [{ type: 2, metadata: { channel_id: '1' } }, { type: 3, metadata: { duration_seconds: 60 } }] })
+    await rejectsWith(d.updateAutomodRule(G1, ok.id, { trigger_type: 6 }), 'invalid_input')
+  })
+  it('channel parent must be in the same guild', async () => {
+    const { d, text } = await seeded()
+    d.seedGuild(G2)
+    const other = await d.createChannel(G2, { name: 'o', type: 4 })
+    await rejectsWith(d.updateChannel(text.id, { parent_id: other.id }), 'not_found')
   })
 })

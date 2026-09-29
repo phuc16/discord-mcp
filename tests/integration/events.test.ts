@@ -44,7 +44,7 @@ describe('events_poll', () => {
     const got = items(r)
     expect(got.map((e) => e.data.n)).toEqual([1, 2, 3])
     expect(got.map((e) => e.id)).toEqual([...got.map((e) => e.id)].sort((a, b) => a - b))
-    expect(r.body.next_cursor).toBe(String(got[2]!.id))
+    expect(r.body.next_cursor).toBe(got[2]!.id)
   })
 
   it('filters by type', async () => {

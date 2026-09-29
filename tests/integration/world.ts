@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { AnyToolDef } from '../../src/contracts/index.js'
-import { buildHarness } from '../fakes/harness.js'
+import { stdioPrincipal, buildHarness } from '../fakes/harness.js'
 import type { Harness } from '../fakes/harness.js'
 import { GUILD_A, GUILD_B } from './helpers.js'
 
@@ -54,6 +54,13 @@ export const synth = (s: Json): unknown => {
 export const EXTRAS: Record<string, Record<string, unknown>> = {
   messages_send: { content: 'x' },
   messages_edit: { content: 'x' },
+  messages_purge: { before: '999999999999999999' },
+  rules_create_destructive: {
+    trigger: { event: 'member_join', filter: {} },
+    actions: [{ tool: 'mod_kick', input_template: { user_id: '{{event.data.user_id}}' } }],
+    allow_destructive: true,
+  },
+  rules_update_destructive: { allow_destructive: true },
   rules_test: { sample_event: { id: 1, guildId: GUILD_A, type: 'member_join', at: '2030-01-01T00:00:00Z', data: {} } },
 }
 
@@ -63,10 +70,11 @@ export interface World {
   foreign: Record<string, string>
   own: Record<string, string>
   memberA: string
+  ruleId: string
 }
 
 export const buildWorld = async (): Promise<World> => {
-  const harness = await buildHarness({ config: { guilds: { [GUILD_A]: { max_tier: 'destructive' } } } })
+  const harness = await buildHarness({ config: { safety: { allow_token_confirm: true }, guilds: { [GUILD_A]: { max_tier: 'destructive' } } } })
   const d = harness.discord
   const foreign: Record<string, string> = {}
   const own: Record<string, string> = {}
@@ -84,14 +92,23 @@ export const buildWorld = async (): Promise<World> => {
     into.code = (await d.createInvite(ch.id, {})).code as string
     into.event_id = (await d.createScheduledEvent(guildId, { name: 'e' })).id
     into.emoji_id = (await d.createEmoji(guildId, { name: 'e', image: 'data:image/png;base64,AA==' })).id
-    into.sticker_id = (await d.createSticker(guildId, { name: 's', description: 'd', tags: 't', file: 'AA==' })).id
+    into.sticker_id = (await d.createSticker(guildId, { name: 'sticker', description: 'sticker', tags: 't', file: 'data:image/png;base64,AA==' })).id
     into.role_id = (await d.createRole(guildId, { name: 'r' })).id
-    into.rule_id = (await d.createAutomodRule(guildId, { name: 'am' })).id
+    into.rule_id = (await d.createAutomodRule(guildId, { name: 'am', event_type: 1, trigger_type: 1, actions: [{ type: 1 }] })).id
   }
   await seed(GUILD_B, foreign, 'b')
   await seed(GUILD_A, own, 'a')
+  const rule = await harness.rules.create(stdioPrincipal, {
+    guild_id: GUILD_A,
+    trigger: { event: 'member_join', filter: {} },
+    conditions: [],
+    actions: [{ tool: 'roles_assign', input_template: { user_id: '{{event.data.user_id}}', role_id: own.role_id } }],
+    cooldown_sec: 0,
+    allow_destructive: false,
+    enabled: true,
+  })
   d.calls.length = 0
-  return { harness, foreign, own, memberA }
+  return { harness, foreign, own, memberA, ruleId: rule.id }
 }
 
 export const argsFor = (tool: AnyToolDef, world: World, foreignKey?: string): Record<string, unknown> => {
@@ -104,6 +121,7 @@ export const argsFor = (tool: AnyToolDef, world: World, foreignKey?: string): Re
     args[foreignKey] = world.foreign[foreignKey]
     if (foreignKey === 'rule_id' && tool.name.startsWith('rules_')) args.rule_id = 'rule-in-b'
   }
+  if (!foreignKey && tool.name.startsWith('rules_') && 'rule_id' in args) args.rule_id = world.ruleId
   Object.assign(args, EXTRAS[tool.name])
   return args
 }

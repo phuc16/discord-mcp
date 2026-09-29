@@ -27,11 +27,20 @@ export class FakeGateway implements GatewayPort {
     return this.current
   }
 
+  disconnect(): void {
+    this.setStatus('disconnected')
+  }
+
+  reconnect(): void {
+    this.setStatus('ready')
+  }
+
   emit(e: NewEvent): void {
     for (const cb of [...this.eventListeners]) cb(e)
   }
 
   setStatus(s: GatewayStatus): void {
+    if (s === this.current) return
     this.current = s
     for (const cb of [...this.statusListeners]) cb(s)
   }

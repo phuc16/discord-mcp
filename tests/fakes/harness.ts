@@ -94,7 +94,7 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
   })
   events.start()
   const registry = buildToolRegistry(allTools, config.tools.deny)
-  const pipeline = { policy, confirm, audit, limiter, now: clock.now }
+  const pipeline = { policy, confirm, audit, limiter, allowTokenConfirm: config.safety.allow_token_confirm, now: clock.now }
   const holder: { services?: Services } = {}
   const rules = createRulesService({
     store,
@@ -120,6 +120,7 @@ export const buildHarness = async (o: { config?: Partial<Config> } = {}): Promis
         services,
         logger,
         eventFeed: events,
+        recentEvents: (guildId, limit) => events.recent(guildId, limit),
         runTool: (def, raw, p, opts) => runTool(pipeline, def, raw, p, { ...opts, discord, services, logger }),
       },
       () => principal,

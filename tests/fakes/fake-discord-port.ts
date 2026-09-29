@@ -15,6 +15,25 @@ const take = <T>(v: T | undefined, what: string, id: string): T => {
   return v
 }
 
+const omit = (o: Payload, ...keys: string[]): Payload => Object.fromEntries(Object.entries(o).filter(([k]) => !keys.includes(k)))
+
+const invalid = (message: string): McpToolError => new McpToolError('invalid_input', message)
+
+const cmpId = (a: string, b: string): number => {
+  const d = BigInt(a) - BigInt(b)
+  return d < 0n ? -1 : d > 0n ? 1 : 0
+}
+
+const PERMISSION_BITS = /^\d{1,20}$/
+const THREAD_ARCHIVE_MINUTES = new Set([60, 1440, 4320, 10080])
+const THREAD_PARENT_TYPES: Record<number, number[]> = { 11: [0, 5], 12: [0], 10: [5] }
+const STICKER_MIME = /^data:(image\/png|image\/apng|application\/json);base64,[A-Za-z0-9+/=]+$/
+const AUTOMOD_EVENT_MESSAGE_SEND = 1
+const AUTOMOD_EVENT_MEMBER_UPDATE = 2
+const AUTOMOD_TRIGGER_MEMBER_PROFILE = 6
+const AUTOMOD_MAX_TIMEOUT_SECONDS = 2_419_200
+const MAX_ROLES = 250
+
 const readOnlyMethods = new Set(['seedGuild'])
 
 export class FakeDiscordPort implements DiscordPort {
@@ -33,6 +52,7 @@ export class FakeDiscordPort implements DiscordPort {
   memberPermissions = new Map<string, string>()
   banOptions = new Map<string, { delete_message_seconds?: number }>()
   auditEntries = new Map<string, Payload[]>()
+  stickerUploads: { field: string; contentType: string; name: string }[] = []
   calls: { method: string; args: unknown[]; ok?: boolean }[] = []
 
   constructor() {
@@ -103,7 +123,7 @@ export class FakeDiscordPort implements DiscordPort {
   }
 
   #addMember(guildId: string, userId: string): Dto {
-    const m: Dto = { id: userId, user: { id: userId, username: `user-${userId}` }, roles: [], nick: null }
+    const m = { user: { id: userId, username: `user-${userId}` }, roles: [], nick: null } as unknown as Dto
     this.#guildMembers(guildId).set(userId, m)
     return m
   }
@@ -125,6 +145,43 @@ export class FakeDiscordPort implements DiscordPort {
   #patch<T extends Dto>(target: T, patch: Payload): T {
     Object.assign(target, patch, { id: target.id })
     return target
+  }
+
+  #patchMember(target: Dto, patch: Payload): Dto {
+    Object.assign(target, omit(patch, 'id', 'user'))
+    return target
+  }
+
+  #validateRole(spec: Payload): void {
+    if (spec.name !== undefined && (typeof spec.name !== 'string' || spec.name.length < 1 || spec.name.length > 100)) throw invalid('role name must be 1-100 characters')
+    if (spec.permissions !== undefined && !(typeof spec.permissions === 'string' && PERMISSION_BITS.test(spec.permissions))) throw invalid('role permissions must be a decimal string')
+    if (spec.color !== undefined && !(Number.isInteger(spec.color) && (spec.color as number) >= 0 && (spec.color as number) <= 0xffffff)) throw invalid('role color out of range')
+    if (spec.hoist !== undefined && typeof spec.hoist !== 'boolean') throw invalid('role hoist must be boolean')
+    if (spec.mentionable !== undefined && typeof spec.mentionable !== 'boolean') throw invalid('role mentionable must be boolean')
+  }
+
+  #validateAutomod(spec: Payload, existing?: Dto): void {
+    const merged = { ...existing, ...spec }
+    if (spec.name !== undefined && (typeof spec.name !== 'string' || spec.name.length < 1 || spec.name.length > 100)) throw invalid('automod name must be 1-100 characters')
+    if (existing === undefined) {
+      if (merged.event_type === undefined || merged.trigger_type === undefined || merged.actions === undefined) throw invalid('automod rule needs event_type, trigger_type and actions')
+    }
+    if (merged.event_type !== undefined && ![AUTOMOD_EVENT_MESSAGE_SEND, AUTOMOD_EVENT_MEMBER_UPDATE].includes(merged.event_type as number)) throw invalid('automod event_type must be 1 or 2')
+    if (merged.trigger_type === AUTOMOD_TRIGGER_MEMBER_PROFILE && merged.event_type !== AUTOMOD_EVENT_MEMBER_UPDATE) throw invalid('automod trigger_type 6 requires event_type 2')
+    if (merged.trigger_type !== AUTOMOD_TRIGGER_MEMBER_PROFILE && merged.event_type === AUTOMOD_EVENT_MEMBER_UPDATE) throw invalid('automod event_type 2 requires trigger_type 6')
+    const actions = merged.actions
+    if (actions !== undefined) {
+      if (!Array.isArray(actions) || actions.length < 1 || actions.length > 3) throw invalid('automod needs 1-3 actions')
+      for (const a of actions as Payload[]) {
+        const meta = (a.metadata as Payload | undefined) ?? {}
+        if (![1, 2, 3].includes(a.type as number)) throw invalid('automod action type must be 1, 2 or 3')
+        if (a.type === 2 && typeof meta.channel_id !== 'string') throw invalid('automod send_alert_message action needs metadata.channel_id')
+        if (a.type === 3) {
+          const d = meta.duration_seconds
+          if (!Number.isInteger(d) || (d as number) < 1 || (d as number) > AUTOMOD_MAX_TIMEOUT_SECONDS) throw invalid('automod timeout action needs metadata.duration_seconds within 4 weeks')
+        }
+      }
+    }
   }
 
   async listBotGuildIds(): Promise<Snowflake[]> {
@@ -187,7 +244,9 @@ export class FakeDiscordPort implements DiscordPort {
   }
 
   async updateChannel(channelId: Snowflake, patch: Payload): Promise<Dto> {
-    return this.#patch(this.#channel(channelId), patch)
+    const c = this.#channel(channelId)
+    if (patch.parent_id !== undefined && patch.parent_id !== null && this.#channel(patch.parent_id as string).guild_id !== c.guild_id) throw notFound('channel', patch.parent_id as string)
+    return this.#patch(c, patch)
   }
 
   async moveChannels(guildId: Snowflake, positions: { id: Snowflake; position: number; parent_id?: Snowflake | null }[]): Promise<void> {
@@ -224,28 +283,60 @@ export class FakeDiscordPort implements DiscordPort {
     return [...this.channels.values()].filter((c) => c.guild_id === guildId && [10, 11, 12].includes(c.type as number))
   }
 
-  async listArchivedThreads(channelId: Snowflake): Promise<Dto[]> {
-    this.#channel(channelId)
-    return []
+  async listArchivedThreads(channelId: Snowflake, q: { kind: 'public' | 'private'; before?: string; limit?: number }): Promise<Dto[]> {
+    const parent = this.#channel(channelId)
+    if (q.before !== undefined && Number.isNaN(Date.parse(q.before))) throw invalid('before must be an ISO8601 timestamp')
+    const wanted = q.kind === 'public' ? [10, 11] : [12]
+    return [...this.channels.values()]
+      .filter((c) => c.parent_id === parent.id && wanted.includes(c.type as number) && (c.thread_metadata as Payload | undefined)?.archived === true)
+      .slice(0, q.limit ?? 50)
   }
 
   async createThread(channelId: Snowflake, spec: Payload & { message_id?: Snowflake }): Promise<Dto> {
-    const guildId = this.#guildOf(channelId)
-    if (spec.message_id !== undefined) this.#message(channelId, spec.message_id)
-    return this.#addChannel(guildId, { type: 11, parent_id: channelId, ...spec })
+    const parent = this.#channel(channelId)
+    const { message_id: messageId, ...rest } = spec
+    if (typeof rest.name !== 'string' || rest.name.length < 1 || rest.name.length > 100) throw invalid('thread name must be 1-100 characters')
+    if (rest.auto_archive_duration !== undefined && !THREAD_ARCHIVE_MINUTES.has(rest.auto_archive_duration as number)) throw invalid('auto_archive_duration must be 60, 1440, 4320 or 10080')
+    if (parent.type === 15) throw invalid('use createForumPost for forum channels')
+    if (messageId !== undefined) {
+      this.#message(channelId, messageId)
+      if (![0, 5].includes(parent.type as number)) throw invalid('threads from a message need a text or announcement channel')
+      if ([...this.channels.values()].some((c) => c.id === messageId && c.parent_id === channelId)) throw invalid('a thread already exists for this message')
+      const thread = this.#addChannel(parent.guild_id as string, { ...rest, id: undefined, type: parent.type === 5 ? 10 : 11, parent_id: channelId, thread_metadata: { archived: false } })
+      this.channels.delete(thread.id)
+      const withId = { ...thread, id: messageId }
+      this.channels.set(messageId, withId)
+      return withId
+    }
+    const type = (rest.type as number | undefined) ?? 12
+    if (!THREAD_PARENT_TYPES[type]) throw invalid('thread type must be 10, 11 or 12')
+    if (!THREAD_PARENT_TYPES[type]!.includes(parent.type as number)) throw invalid(`thread type ${type} cannot be created in a channel of type ${String(parent.type)}`)
+    return this.#addChannel(parent.guild_id as string, { ...rest, type, parent_id: channelId, thread_metadata: { archived: false } })
   }
 
-  async addThreadMember(threadId: Snowflake): Promise<void> {
-    this.#channel(threadId)
+  async addThreadMember(threadId: Snowflake, userId: Snowflake): Promise<void> {
+    const t = this.#channel(threadId)
+    if (![10, 11, 12].includes(t.type as number)) throw invalid('not a thread')
+    take(this.#guildMembers(t.guild_id as string).get(userId), 'member', userId)
   }
 
-  async removeThreadMember(threadId: Snowflake): Promise<void> {
-    this.#channel(threadId)
+  async removeThreadMember(threadId: Snowflake, userId: Snowflake): Promise<void> {
+    const t = this.#channel(threadId)
+    if (![10, 11, 12].includes(t.type as number)) throw invalid('not a thread')
+    take(this.#guildMembers(t.guild_id as string).get(userId), 'member', userId)
   }
 
   async createForumPost(channelId: Snowflake, spec: Payload): Promise<Dto> {
-    const guildId = this.#guildOf(channelId)
-    return this.#addChannel(guildId, { type: 11, parent_id: channelId, ...spec })
+    const parent = this.#channel(channelId)
+    if (![15, 16].includes(parent.type as number)) throw invalid('forum posts need a forum or media channel')
+    if (typeof spec.name !== 'string' || spec.name.length < 1 || spec.name.length > 100) throw invalid('post name must be 1-100 characters')
+    const message = spec.message as Payload | undefined
+    if (!message || (message.content === undefined && message.embeds === undefined)) throw invalid('forum post needs message content or embeds')
+    const available = new Set(((parent.available_tags as Payload[] | undefined) ?? []).map((t) => t.id as string))
+    for (const tag of (spec.applied_tags as string[] | undefined) ?? []) if (!available.has(tag)) throw invalid(`unknown forum tag ${tag}`)
+    const post = this.#addChannel(parent.guild_id as string, { ...omit(spec, 'message'), type: 11, parent_id: channelId, thread_metadata: { archived: false } })
+    this.#messagesOf(post.id).push({ id: post.id, channel_id: post.id, guild_id: post.guild_id, pinned: false, reactions: [], ...message, author: { id: 'bot', bot: true } })
+    return { ...post, message: this.#messagesOf(post.id)[0] }
   }
 
   async listRoles(guildId: Snowflake): Promise<Dto[]> {
@@ -253,17 +344,25 @@ export class FakeDiscordPort implements DiscordPort {
   }
 
   async createRole(guildId: Snowflake, spec: Payload): Promise<Dto> {
-    this.#guild(guildId)
-    return this.#addRole(guildId, spec)
+    this.#validateRole(spec)
+    if (this.#guildRoles(guildId).length >= MAX_ROLES) throw invalid('maximum number of roles reached')
+    return this.#addRole(guildId, omit(spec, 'position'))
   }
 
   async updateRole(guildId: Snowflake, roleId: Snowflake, patch: Payload): Promise<Dto> {
-    return this.#patch(take(this.#guildRoles(guildId).find((r) => r.id === roleId), 'role', roleId), patch)
+    const role = take(this.#guildRoles(guildId).find((r) => r.id === roleId), 'role', roleId)
+    if (roleId === guildId && patch.name !== undefined) throw invalid('the @everyone role cannot be renamed')
+    this.#validateRole(patch)
+    return this.#patch(role, patch)
   }
 
   async reorderRoles(guildId: Snowflake, positions: { id: Snowflake; position: number }[]): Promise<Dto[]> {
     const roles = this.#guildRoles(guildId)
-    for (const p of positions) take(roles.find((r) => r.id === p.id), 'role', p.id).position = p.position
+    for (const p of positions) {
+      if (!Number.isInteger(p.position) || p.position < 0) throw invalid('role position must be a non-negative integer')
+      if (p.id === guildId) throw invalid('the @everyone role cannot be moved')
+      take(roles.find((r) => r.id === p.id), 'role', p.id).position = p.position
+    }
     return [...roles]
   }
 
@@ -271,14 +370,17 @@ export class FakeDiscordPort implements DiscordPort {
     const roles = this.#guildRoles(guildId)
     const idx = roles.findIndex((r) => r.id === roleId)
     if (idx < 0) throw notFound('role', roleId)
+    if (roleId === guildId) throw invalid('the @everyone role cannot be deleted')
     roles.splice(idx, 1)
     for (const m of this.#guildMembers(guildId).values()) m.roles = (m.roles as string[]).filter((r) => r !== roleId)
   }
 
   async listMembers(guildId: Snowflake, q: { limit: number; after?: Snowflake }): Promise<Dto[]> {
-    const all = [...this.#guildMembers(guildId).values()]
-    const start = q.after ? all.findIndex((m) => m.id === q.after) + 1 : 0
-    return all.slice(start, start + q.limit)
+    if (!Number.isInteger(q.limit) || q.limit < 1 || q.limit > 1000) throw invalid('limit must be 1-1000')
+    return [...this.#guildMembers(guildId).values()]
+      .filter((m) => q.after === undefined || cmpId((m.user as Payload).id as string, q.after) > 0)
+      .sort((a, b) => cmpId((a.user as Payload).id as string, (b.user as Payload).id as string))
+      .slice(0, q.limit)
   }
 
   async getMember(guildId: Snowflake, userId: Snowflake): Promise<Dto> {
@@ -293,7 +395,7 @@ export class FakeDiscordPort implements DiscordPort {
   }
 
   async updateMember(guildId: Snowflake, userId: Snowflake, patch: Payload): Promise<Dto> {
-    return this.#patch(take(this.#guildMembers(guildId).get(userId), 'member', userId), patch)
+    return this.#patchMember(take(this.#guildMembers(guildId).get(userId), 'member', userId), patch)
   }
 
   async addMemberRole(guildId: Snowflake, userId: Snowflake, roleId: Snowflake): Promise<void> {
@@ -315,6 +417,7 @@ export class FakeDiscordPort implements DiscordPort {
   }
 
   async banMember(guildId: Snowflake, userId: Snowflake, o: { delete_message_seconds?: number }): Promise<void> {
+    if (o.delete_message_seconds !== undefined && (o.delete_message_seconds < 0 || o.delete_message_seconds > 604_800)) throw invalid('delete_message_seconds must be 0-604800')
     this.#guildMembers(guildId).delete(userId)
     take(this.bans.get(guildId), 'guild', guildId).add(userId)
     this.banOptions.set(`${guildId}:${userId}`, o)
@@ -337,13 +440,15 @@ export class FakeDiscordPort implements DiscordPort {
         banned.push(id)
       } else failed.push(id)
     }
+    if (banned.length === 0) throw invalid('none of the users could be banned')
     return { banned_users: banned, failed_users: failed }
   }
 
   async listBans(guildId: Snowflake, q: { limit: number; after?: Snowflake }): Promise<Payload[]> {
     this.#guild(guildId)
     return [...take(this.bans.get(guildId), 'guild', guildId)]
-      .filter((id) => !q.after || id > q.after)
+      .sort(cmpId)
+      .filter((id) => !q.after || cmpId(id, q.after) > 0)
       .slice(0, q.limit)
       .map((id) => ({ user: { id }, reason: null }))
   }
@@ -355,13 +460,16 @@ export class FakeDiscordPort implements DiscordPort {
 
   async createAutomodRule(guildId: Snowflake, spec: Payload): Promise<Dto> {
     this.#guild(guildId)
-    const r: Dto = { ...spec, id: nextId(), guild_id: guildId }
+    this.#validateAutomod(spec)
+    const r: Dto = { enabled: true, ...spec, id: nextId(), guild_id: guildId }
     this.automodRules.set(r.id, r)
     return r
   }
 
   async updateAutomodRule(guildId: Snowflake, ruleId: Snowflake, patch: Payload): Promise<Dto> {
-    return this.#patch(this.#scoped(this.automodRules, guildId, ruleId, 'automod rule'), patch)
+    const rule = this.#scoped(this.automodRules, guildId, ruleId, 'automod rule')
+    this.#validateAutomod(patch, rule)
+    return this.#patch(rule, patch)
   }
 
   async deleteAutomodRule(guildId: Snowflake, ruleId: Snowflake): Promise<void> {
@@ -552,6 +660,12 @@ export class FakeDiscordPort implements DiscordPort {
 
   async createSticker(guildId: Snowflake, spec: { name: string; description: string; tags: string; file: string }): Promise<Dto> {
     this.#guild(guildId)
+    if (spec.name.length < 2 || spec.name.length > 30) throw invalid('sticker name must be 2-30 characters')
+    if (spec.description.length !== 0 && (spec.description.length < 2 || spec.description.length > 100)) throw invalid('sticker description must be empty or 2-100 characters')
+    if (spec.tags.length < 1 || spec.tags.length > 200) throw invalid('sticker tags must be 1-200 characters')
+    const mime = STICKER_MIME.exec(spec.file)?.[1]
+    if (!mime) throw invalid('sticker file must be a png, apng or json data URI')
+    this.stickerUploads.push({ field: 'file', contentType: mime, name: spec.name })
     const s: Dto = { name: spec.name, description: spec.description, tags: spec.tags, id: nextId(), guild_id: guildId }
     this.stickers.set(s.id, s)
     return s

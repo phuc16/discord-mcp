@@ -11,7 +11,7 @@ afterEach(async () => {
 
 const setup = async () => {
   const harness = await buildHarness({
-    config: { guilds: { [GUILD_A]: { max_tier: 'destructive' }, [GUILD_B]: { max_tier: 'write' } } },
+    config: { safety: { allow_token_confirm: true }, guilds: { [GUILD_A]: { max_tier: 'destructive' }, [GUILD_B]: { max_tier: 'write' } } },
   })
   h = harness
   harness.discord.seedGuild(GUILD_A)
@@ -107,10 +107,12 @@ describe('policy matrix', () => {
   it('moderation group needs moderation permissions for destructive kick', async () => {
     const { harness } = await setup()
     const member = '500000000000000001'
-    harness.discord.members.get(GUILD_A)!.set(member, { id: member, user: { id: member, username: 'x' }, roles: [] })
+    harness.discord.members.get(GUILD_A)!.set(member, { user: { id: member, username: 'x' }, roles: [] } as never)
+    const kick = await harness.asPrincipal({ kind: 'user', userId: '15', userName: 'km', guilds: { [GUILD_A]: '34' } })
     const bm = await harness.asPrincipal(principals.banAndManageGuild)
     const mg = await harness.asPrincipal(principals.manageGuildOnly)
-    expect((await call(bm, 'mod_kick', { guild_id: GUILD_A, user_id: member })).code).toBe('confirm_required')
+    expect((await call(kick, 'mod_kick', { guild_id: GUILD_A, user_id: member })).code).toBe('confirm_required')
+    expect((await call(bm, 'mod_kick', { guild_id: GUILD_A, user_id: member })).code).toBe('tier_exceeded')
     expect((await call(mg, 'mod_kick', { guild_id: GUILD_A, user_id: member })).code).toBe('tier_exceeded')
     expect(mutatingCalls(harness.discord)).toEqual([])
   })

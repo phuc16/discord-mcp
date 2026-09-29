@@ -76,10 +76,12 @@ roles_remove:write
 roles_reorder:write
 roles_update:write
 rules_create:write
+rules_create_destructive:destructive
 rules_delete:write
 rules_list:read
 rules_test:read
 rules_update:write
+rules_update_destructive:destructive
 server_policy:read
 server_whoami:read
 sevents_create:write

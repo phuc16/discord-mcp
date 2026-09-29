@@ -10,7 +10,7 @@ afterEach(async () => {
 })
 
 const setup = async () => {
-  const harness = await buildHarness({ config: { guilds: { [GUILD_A]: { max_tier: 'destructive' } } } })
+  const harness = await buildHarness({ config: { safety: { allow_token_confirm: true }, guilds: { [GUILD_A]: { max_tier: 'destructive' } } } })
   h = harness
   harness.discord.seedGuild(GUILD_A)
   const ch1 = (await harness.discord.createChannel(GUILD_A, { name: 'one', type: 0 })).id
@@ -137,18 +137,19 @@ describe('in-band elicitation', () => {
     expect(harness.store.audit.query({ limit: 10 }).map((a) => a.outcome)).toEqual(['ok'])
   })
 
-  it('decline does not execute and is audited as denied', async () => {
+  it('decline with token flow enabled falls back to a token and does not execute', async () => {
     const { harness, ch1 } = await setup()
     const client = await harness.asPrincipal(principals.stdio, { elicit: 'decline' })
     const r = await call(client, 'channels_delete', { guild_id: GUILD_A, channel_id: ch1 })
-    expect(r.code).toBe('confirm_invalid')
+    expect(r.code).toBe('confirm_required')
+    expect(typeof r.details.confirm_token).toBe('string')
     expect(harness.discord.channels.has(ch1)).toBe(true)
     expect(deletes(harness)).toBe(0)
-    expect(harness.store.audit.query({ limit: 10 }).map((a) => [a.outcome, a.errorCode])).toEqual([['denied', 'confirm_invalid']])
+    expect(harness.store.audit.query({ limit: 10 }).map((a) => [a.outcome, a.errorCode])).toEqual([['dry_run', 'confirm_required']])
   })
 
   it('elicitation never bypasses tier checks', async () => {
-    const harness = await buildHarness({ config: { guilds: { [GUILD_A]: { max_tier: 'write' } } } })
+    const harness = await buildHarness({ config: { safety: { allow_token_confirm: true }, guilds: { [GUILD_A]: { max_tier: 'write' } } } })
     h = harness
     harness.discord.seedGuild(GUILD_A)
     const ch = (await harness.discord.createChannel(GUILD_A, { name: 'x', type: 0 })).id

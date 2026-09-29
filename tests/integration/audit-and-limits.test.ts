@@ -11,7 +11,7 @@ afterEach(async () => {
 
 const setup = async () => {
   const harness = await buildHarness({
-    config: { guilds: { [GUILD_A]: { max_tier: 'destructive' }, [GUILD_B]: { max_tier: 'read' } } },
+    config: { safety: { allow_token_confirm: true }, guilds: { [GUILD_A]: { max_tier: 'destructive' }, [GUILD_B]: { max_tier: 'read' } } },
   })
   h = harness
   harness.discord.seedGuild(GUILD_A)
@@ -79,34 +79,50 @@ describe('audit', () => {
   })
 })
 
-describe('bulk limits', () => {
-  const bulk = (ch: string) => ({ guild_id: GUILD_A, channel_id: ch, limit: 5 })
+const FUTURE = '999999999999999999'
 
-  it('6th bulk call in a minute is rate_limited, and recovers after the window', async () => {
+describe('bulk limits', () => {
+  const bulk = (ch: string) => ({ guild_id: GUILD_A, channel_id: ch, limit: 5, before: FUTURE })
+
+  const purgeOnce = async (client: Parameters<typeof call>[0], ch: string, guild = GUILD_A) => {
+    const preview = await call(client, 'messages_purge', { guild_id: guild, channel_id: ch, limit: 5, before: FUTURE })
+    expect(preview.code).toBe('confirm_required')
+    const { confirm_token: token, preview: p } = preview.details as { confirm_token: string; preview: { before?: string } }
+    return call(client, 'messages_purge', { guild_id: guild, channel_id: ch, limit: 5, before: p.before ?? FUTURE, confirm_token: token })
+  }
+
+  it('previews and invalid tokens never consume a bulk slot', async () => {
+    const { harness, ch } = await setup()
+    for (let i = 0; i < 12; i++) expect((await call(harness.client, 'messages_purge', bulk(ch))).code).toBe('confirm_required')
+    for (let i = 0; i < 6; i++) expect((await call(harness.client, 'messages_purge', { ...bulk(ch), confirm_token: 'bogus' })).code).toBe('confirm_invalid')
+    expect((await purgeOnce(harness.client, ch)).code).not.toBe('rate_limited')
+  })
+
+  it('6th executed bulk call in a minute is rate_limited, and recovers after the window', async () => {
     const { harness, ch } = await setup()
     for (let i = 0; i < 5; i++) {
-      const r = await call(harness.client, 'messages_purge', bulk(ch))
-      expect(r.code, `call ${i + 1}`).toBe('confirm_required')
+      const r = await purgeOnce(harness.client, ch)
+      expect(r.code, `call ${i + 1}`).not.toBe('rate_limited')
     }
-    const sixth = await call(harness.client, 'messages_purge', bulk(ch))
+    const sixth = await purgeOnce(harness.client, ch)
     expect(sixth.code).toBe('rate_limited')
     expect(typeof sixth.details.retry_after).toBe('number')
     harness.clock.advance(61_000)
-    expect((await call(harness.client, 'messages_purge', bulk(ch))).code).toBe('confirm_required')
+    expect((await purgeOnce(harness.client, ch)).code).not.toBe('rate_limited')
   })
 
   it('the limit is per guild', async () => {
     const harness = await buildHarness({
-      config: { guilds: { [GUILD_A]: { max_tier: 'destructive' }, [GUILD_B]: { max_tier: 'destructive' } } },
+      config: { safety: { allow_token_confirm: true }, guilds: { [GUILD_A]: { max_tier: 'destructive' }, [GUILD_B]: { max_tier: 'destructive' } } },
     })
     h = harness
     harness.discord.seedGuild(GUILD_A)
     harness.discord.seedGuild(GUILD_B)
     const chA = (await harness.discord.createChannel(GUILD_A, { name: 'a', type: 0 })).id
     const chB = (await harness.discord.createChannel(GUILD_B, { name: 'b', type: 0 })).id
-    for (let i = 0; i < 5; i++) await call(harness.client, 'messages_purge', { guild_id: GUILD_A, channel_id: chA, limit: 5 })
-    expect((await call(harness.client, 'messages_purge', { guild_id: GUILD_A, channel_id: chA, limit: 5 })).code).toBe('rate_limited')
-    expect((await call(harness.client, 'messages_purge', { guild_id: GUILD_B, channel_id: chB, limit: 5 })).code).toBe('confirm_required')
+    for (let i = 0; i < 5; i++) await purgeOnce(harness.client, chA)
+    expect((await purgeOnce(harness.client, chA)).code).toBe('rate_limited')
+    expect((await purgeOnce(harness.client, chB, GUILD_B)).code).not.toBe('rate_limited')
   })
 
   it('caps: purge limit 1001 and 201 targets are rejected before Discord', async () => {

@@ -5,5 +5,6 @@ coverage
 *.db-wal
 *.db-shm
 config.yaml
+data/
 .env
 !.env.example

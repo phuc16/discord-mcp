@@ -11,3 +11,4 @@ config.yaml
 docs/superpowers
 tests
 data
+data/

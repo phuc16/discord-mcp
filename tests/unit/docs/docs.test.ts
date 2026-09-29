@@ -158,15 +158,19 @@ describe('docker', () => {
   })
   it('excludes secrets and state from the build context', () => {
     const ignore = read('.dockerignore').split('\n')
-    for (const entry of ['.env*', '*.db', 'config.yaml', 'node_modules', 'tests']) expect(ignore).toContain(entry)
+    for (const entry of ['.env*', '*.db', 'config.yaml', 'node_modules', 'tests', 'data/']) expect(ignore).toContain(entry)
+  })
+  it('gitignore keeps the data directory out of git', () => {
+    expect(read('.gitignore').split('\n')).toContain('data/')
   })
   it('compose file parses and binds loopback', async () => {
     const { parse } = await import('yaml')
-    const c = parse(read('docker-compose.yml')) as { services: Record<string, { ports: string[]; env_file: string; volumes: string[] }> }
+    interface Service { ports: string[]; env_file: string; volumes: string[]; restart: string }
+    const c = parse(read('docker-compose.yml')) as { services: Record<string, Service> }
     const svc = c.services['discord-mcp']!
     expect(svc.ports).toEqual(['127.0.0.1:8787:8787'])
     expect(svc.env_file).toBe('.env')
-    expect((svc as { restart: string }).restart).toBe('on-failure:3')
+    expect(svc.restart).toBe('unless-stopped')
     expect(svc.volumes).toContain('./data:/data')
   })
   it('docker config example parses and binds 0.0.0.0 with a /data database', async () => {

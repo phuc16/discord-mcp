@@ -19,7 +19,7 @@ describe('reads', () => {
   it('sevents_get', async () => {
     const ctx = makeCtx({ discord: { getScheduledEvent: async () => ({ id: E }) } })
     await run(t('sevents_get'), ctx, { guild_id: G, event_id: E })
-    expect(ctx.calls[0]).toEqual({ method: 'getScheduledEvent', args: [G, E] })
+    expect(ctx.calls[0]).toEqual({ method: 'getScheduledEvent', args: [G, E, 'via discord-mcp by tester (corr-1)'] })
   })
   it('sevents_list_users defaults and bounds limit', async () => {
     const ctx = makeCtx({ discord: { listScheduledEventUsers: async () => [] } })
@@ -80,6 +80,6 @@ describe('sevents_update and delete', () => {
   it('delete handler deletes', async () => {
     const ctx = makeCtx({ discord: { deleteScheduledEvent: async () => undefined } })
     await run(t('sevents_delete'), ctx, { guild_id: G, event_id: E })
-    expect(ctx.calls[0]).toEqual({ method: 'deleteScheduledEvent', args: [G, E] })
+    expect(ctx.calls[0]).toEqual({ method: 'deleteScheduledEvent', args: [G, E, 'via discord-mcp by tester (corr-1)'] })
   })
 })

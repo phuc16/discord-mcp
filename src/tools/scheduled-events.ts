@@ -104,7 +104,7 @@ export const seventsDelete = defineTool({
     }
   },
   handler: async (ctx, i) => {
-    await ctx.discord.deleteScheduledEvent(i.guild_id, i.event_id)
+    await ctx.discord.deleteScheduledEvent(i.guild_id, i.event_id, auditReason(ctx))
     return { data: { event_id: i.event_id } }
   },
 })

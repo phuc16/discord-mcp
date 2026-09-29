@@ -1,5 +1,4 @@
 import { parseArgs } from 'node:util'
-import type { DiscordPort } from '../contracts/index.js'
 import { runCheck } from './check.js'
 import { buildInviteUrl } from './invite-url.js'
 
@@ -47,13 +46,13 @@ export const run = async (argv: string[], env: NodeJS.ProcessEnv = process.env):
     return 1
   }
   if (values.check) {
-    const discordModule = (await import('../discord/index.js')) as unknown as { createDiscordPort: (o: { botToken: string }) => DiscordPort }
+    const { createDiscordPort } = await import('../discord/index.js')
     const result = await runCheck({
       configPath: values.config ?? env.DISCORD_MCP_CONFIG ?? 'config.yaml',
       http: values.http,
       online: values.online,
       env,
-      discord: () => discordModule.createDiscordPort({ botToken: env.DISCORD_BOT_TOKEN ?? '' }),
+      discord: () => createDiscordPort({ botToken: env.DISCORD_BOT_TOKEN ?? '' }),
     })
     if (result.ok) process.stdout.write('ok\n')
     else process.stderr.write(`${result.problems.map((p) => `- ${p}`).join('\n')}\n`)

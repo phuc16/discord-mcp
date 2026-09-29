@@ -1,3 +1,91 @@
+import { createDiscordOAuthPort, createDiscordPort, createGateway } from '../discord/index.js'
+import { createLogger } from '../cli/logger.js'
+import { loadConfig } from '../cli/config-loader.js'
+import { openStore } from '../store/index.js'
+import { startHttp } from './http.js'
+import type { HttpHandle } from './http.js'
+import { startStdio } from './stdio.js'
+import { buildRuntime } from './wiring.js'
+import type { RuntimeInput } from './wiring.js'
+
+export { buildToolRegistry } from './registry.js'
+export { createMcpServer } from './mcp.js'
+export type { ServerDeps } from './mcp.js'
+export { startHttp } from './http.js'
+export { startStdio } from './stdio.js'
+
+export const launch = async (input: RuntimeInput, opts: { http: boolean }): Promise<{ close(): Promise<void>; port?: number }> => {
+  const runtime = buildRuntime(input, opts)
+  await runtime.start()
+  let httpHandle: HttpHandle | undefined
+  let stdio: { close(): Promise<void> } | undefined
+  try {
+    if (opts.http && runtime.http) {
+      httpHandle = await startHttp({
+        deps: runtime.deps,
+        host: input.config.http.host,
+        port: input.config.http.port,
+        bearer: runtime.http.bearer,
+        authRouter: runtime.http.router,
+        health: () => ({ gateway: input.gateway.status(), db: 'ok' }),
+      })
+    } else {
+      stdio = await startStdio(runtime.deps)
+    }
+  } catch (err) {
+    await runtime.stop()
+    input.store.close()
+    throw err
+  }
+  return {
+    port: httpHandle?.port,
+    close: async () => {
+      await httpHandle?.close()
+      await stdio?.close()
+      await runtime.stop()
+      input.store.close()
+    },
+  }
+}
+
+const requireEnv = (env: NodeJS.ProcessEnv, name: string): string => {
+  const value = env[name]
+  if (!value) throw new Error(`missing env var ${name}`)
+  return value
+}
+
 export const startServer = async (opts: { configPath: string; http: boolean }): Promise<void> => {
-  throw new Error(`server not wired yet (${opts.configPath})`)
+  const env = process.env
+  const config = loadConfig(opts.configPath)
+  const logger = createLogger({ level: env.LOG_LEVEL })
+  const botToken = requireEnv(env, 'DISCORD_BOT_TOKEN')
+  const store = openStore(config.database_path)
+  const input: RuntimeInput = {
+    config,
+    env,
+    logger,
+    store,
+    discord: createDiscordPort({ botToken }),
+    gateway: createGateway({ botToken, messageContent: config.message_content_intent }),
+    discordOAuth: opts.http
+      ? createDiscordOAuthPort({ clientId: requireEnv(env, 'DISCORD_CLIENT_ID'), clientSecret: requireEnv(env, 'DISCORD_CLIENT_SECRET') })
+      : undefined,
+  }
+  if (opts.http) {
+    requireEnv(env, 'PUBLIC_BASE_URL')
+    requireEnv(env, 'TOKEN_SIGNING_KEY')
+  }
+  const handle = await launch(input, { http: opts.http })
+  logger.info({ method: 'startup', path: opts.http ? '/mcp' : 'stdio', status: 'listening' }, 'discord-mcp started')
+  let closing = false
+  const shutdown = (): void => {
+    if (closing) return
+    closing = true
+    handle.close().then(
+      () => process.exit(0),
+      () => process.exit(1),
+    )
+  }
+  process.once('SIGINT', shutdown)
+  process.once('SIGTERM', shutdown)
 }

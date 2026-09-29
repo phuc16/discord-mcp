@@ -289,13 +289,9 @@ Tested: image build, non-root user, healthcheck command semantics (200 passes, 5
 
 Deploy from the private image `phuc16/discord-mcp` with `docker-compose.server.yml` (no build on the server; the file name is arbitrary, so renaming it to `docker-compose.prod.yml` is fine as long as you pass it with `-f`). It runs the image as uid 1000 with a read-only root filesystem (`/tmp` is a tmpfs; the SQLite database, its WAL files and the lock file live in `./data`, the only writable path), all capabilities dropped, `no-new-privileges`, memory and pids limits, rotated json-file logs, and the port published on `127.0.0.1:8787` only.
 
-**Step 1: TLS in front (required).** HTTP mode refuses to start unless `PUBLIC_BASE_URL` is `https://` (plain `http://` is accepted only for localhost). So first point DNS at the server, then install Caddy, which gets the certificate itself:
+**Step 1: TLS in front (required).** HTTP mode refuses to start unless `PUBLIC_BASE_URL` is `https://` (plain `http://` is accepted only for localhost). Use a **dedicated subdomain** such as `mcp.example.com`, not a path on an existing site: the OAuth endpoints (`/authorize`, `/token`, `/register`, `/callback`) and the `/.well-known/*` metadata must live at the origin root. Create a DNS `A` record for the subdomain pointing at the server, then pick a proxy. In both cases set `http.trust_proxy: 1` in `data/config.yaml` (one hop, the proxy on the same host), keep the compose port at `127.0.0.1:8787:8787`, set `PUBLIC_BASE_URL=https://your.domain` in `.env`, and register `https://your.domain/callback` as the Discord redirect URI (`discord-mcp --check --http` prints it). Both proxies pass `Cookie` and `Set-Cookie` through untouched.
 
-```bash
-sudo apt install caddy
-```
-
-`/etc/caddy/Caddyfile`:
+*Option A: Caddy* (no existing web server). `sudo apt install caddy`, then `/etc/caddy/Caddyfile`:
 
 ```
 your.domain {
@@ -303,7 +299,52 @@ your.domain {
 }
 ```
 
-Then `sudo systemctl reload caddy`. Open the firewall for 80 (certificate issuance) and 443, never 8787: `sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw enable`. In `data/config.yaml` set `http.trust_proxy: 1` (one proxy) so client IPs come from `X-Forwarded-For`, and set `PUBLIC_BASE_URL=https://your.domain` in `.env`. Register `https://your.domain/callback` as the redirect URI in the Discord developer portal; it must equal `PUBLIC_BASE_URL/callback` exactly (`discord-mcp --check --http` prints it). With nginx instead of Caddy, use `proxy_pass http://127.0.0.1:8787;`, `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` and `proxy_buffering off;` for the event stream; both proxies pass `Cookie` and `Set-Cookie` through untouched.
+`sudo systemctl reload caddy`. Caddy obtains the certificate itself. Open ports 80 (certificate issuance) and 443, never 8787: `sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw enable`.
+
+*Option B: nginx with certbot* (a server that already runs nginx and other sites; the new server block is separate and touches nothing else). Create `/etc/nginx/sites-available/discord-mcp`:
+
+```nginx
+server {
+    listen 80;
+    server_name mcp.example.com;
+
+    client_max_body_size 5m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+```
+
+`Connection ""` (not `upgrade`) is deliberate: the live event stream is a long-lived streamed HTTP response, not a WebSocket; `proxy_buffering off` and the long timeouts keep it flowing. Then enable it and get the certificate; certbot edits the block to add the HTTPS listener and the redirect:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/discord-mcp /etc/nginx/sites-enabled/discord-mcp
+sudo nginx -t && sudo systemctl reload nginx
+sudo certbot --nginx -d mcp.example.com
+```
+
+Ports 80 and 443 are usually already open for your other sites; 8787 must stay closed.
+
+*Verify* (after step 2 has the container running):
+
+```bash
+curl -s https://mcp.example.com/healthz
+curl -s -o /dev/null -w '%{http_code}\n' -X POST https://mcp.example.com/mcp
+claude mcp add --transport http discord https://mcp.example.com/mcp
+```
+
+`/healthz` returns `{"status":"ok",...}`, the unauthenticated `POST /mcp` returns `401`, and after `claude mcp add` run `/mcp` in Claude Code to log in with Discord.
 
 **Step 2: the app.**
 

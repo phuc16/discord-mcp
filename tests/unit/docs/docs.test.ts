@@ -256,4 +256,24 @@ describe('server deployment', () => {
     expect(readme.indexOf('Step 1: TLS in front')).toBeLessThan(readme.indexOf('Step 2: the app'))
     expect(readme.indexOf('apt install caddy')).toBeLessThan(readme.indexOf('docker login'))
   })
+  it('has a complete nginx and certbot example', () => {
+    const readme = read('README.md')
+    const block = /```nginx\n([\s\S]*?)```/.exec(readme)?.[1] ?? ''
+    for (const d of [
+      'proxy_pass http://127.0.0.1:8787;',
+      'proxy_http_version 1.1;',
+      'proxy_set_header Connection "";',
+      'proxy_set_header Host $host;',
+      'proxy_set_header X-Real-IP $remote_addr;',
+      'proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;',
+      'proxy_set_header X-Forwarded-Proto $scheme;',
+      'proxy_buffering off;',
+      'proxy_cache off;',
+      'proxy_read_timeout 3600s;',
+      'proxy_send_timeout 3600s;',
+      'client_max_body_size 5m;',
+    ]) expect(block).toContain(d)
+    expect(block).not.toMatch(/Connection "?upgrade/)
+    for (const s of ['sites-available/discord-mcp', 'ln -s', 'nginx -t && sudo systemctl reload nginx', 'certbot --nginx -d', 'dedicated subdomain', 'A` record', '/healthz', 'claude mcp add --transport http discord https://mcp.example.com/mcp']) expect(readme).toContain(s)
+  })
 })

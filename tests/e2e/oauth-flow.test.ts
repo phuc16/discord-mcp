@@ -692,3 +692,23 @@ describe('secret hygiene', () => {
     for (const l of lines) expect(JSON.stringify(l)).not.toMatch(/code=|state=/)
   })
 })
+
+describe('default rate limiting stays on', () => {
+  it('returns 429 on a burst of dynamic client registrations', async () => {
+    const statuses: number[] = []
+    for (let i = 0; i < 40; i++) {
+      const r = await req(
+        '/register',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ redirect_uris: [REDIRECT], token_endpoint_auth_method: 'none', client_name: `burst-${i}` }),
+        },
+        { sensitive: true },
+      )
+      statuses.push(r.status)
+    }
+    expect(statuses).toContain(429)
+    expect(statuses.indexOf(429)).toBeGreaterThan(0)
+  })
+})

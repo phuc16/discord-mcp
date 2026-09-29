@@ -47,4 +47,15 @@ describe('runCheck', () => {
     const r = await runCheck({ configPath: cfg(), http: false, online: true, env: { DISCORD_BOT_TOKEN: 't' }, discord: () => port })
     expect(r.problems[0]).toMatch(/boom/)
   })
+  it('rejects an http PUBLIC_BASE_URL on a public host in http mode', async () => {
+    const env = { DISCORD_BOT_TOKEN: 't', DISCORD_CLIENT_ID: '1', DISCORD_CLIENT_SECRET: 's', PUBLIC_BASE_URL: 'http://mcp.example.com' }
+    const r = await runCheck({ configPath: cfg(), http: true, online: false, env })
+    expect(r.ok).toBe(false)
+    expect(r.problems.some((p) => p.includes('PUBLIC_BASE_URL') && p.includes('https'))).toBe(true)
+  })
+  it('reports the discord redirect uri in http mode', async () => {
+    const env = { DISCORD_BOT_TOKEN: 't', DISCORD_CLIENT_ID: '1', DISCORD_CLIENT_SECRET: 's', PUBLIC_BASE_URL: 'https://mcp.example.com' }
+    const r = await runCheck({ configPath: cfg(), http: true, online: false, env })
+    expect(r).toEqual({ ok: true, problems: [], redirectUri: 'https://mcp.example.com/callback' })
+  })
 })

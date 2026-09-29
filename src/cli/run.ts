@@ -54,8 +54,10 @@ export const run = async (argv: string[], env: NodeJS.ProcessEnv = process.env):
       env,
       discord: () => createDiscordPort({ botToken: env.DISCORD_BOT_TOKEN ?? '' }),
     })
-    if (result.ok) process.stdout.write('ok\n')
-    else process.stderr.write(`${result.problems.map((p) => `- ${p}`).join('\n')}\n`)
+    if (result.ok) {
+      process.stdout.write('ok\n')
+      if (result.redirectUri) process.stdout.write(`Discord redirect URI to register in the developer portal: ${result.redirectUri}\n`)
+    } else process.stderr.write(`${result.problems.map((p) => `- ${p}`).join('\n')}\n`)
     return result.ok ? 0 : 1
   }
   const { startServer } = await import('../server/index.js')

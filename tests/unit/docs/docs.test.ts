@@ -247,7 +247,13 @@ describe('server deployment', () => {
   })
   it('README and getting-started document the Ubuntu deployment', () => {
     const readme = read('README.md')
-    for (const s of ['Deploy on an Ubuntu server', 'docker-compose.server.yml', 'docker login', 'DISCORD_MCP_TAG', 'reverse_proxy 127.0.0.1:8787', 'ufw', 'https://your.domain/callback', 'supervisorctl restart <service-name>', 'trust_proxy: 1']) expect(readme).toContain(s)
+    for (const s of ['Deploy on an Ubuntu server', 'docker-compose.server.yml', 'docker login', 'DISCORD_MCP_TAG', 'reverse_proxy 127.0.0.1:8787', 'ufw', 'https://your.domain/callback', 'supervisorctl restart <service-name>', 'trust_proxy: 1', 'apt install caddy', 'Issuer URL must be HTTPS', 'docker-compose.prod.yml']) expect(readme).toContain(s)
     expect(read('docs/getting-started.md')).toContain('Deploy on an Ubuntu server')
+  })
+  it('makes TLS the first step of the server deployment', () => {
+    const readme = read('README.md')
+    expect(readme.indexOf('Step 1: TLS in front')).toBeGreaterThan(0)
+    expect(readme.indexOf('Step 1: TLS in front')).toBeLessThan(readme.indexOf('Step 2: the app'))
+    expect(readme.indexOf('apt install caddy')).toBeLessThan(readme.indexOf('docker login'))
   })
 })

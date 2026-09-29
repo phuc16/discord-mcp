@@ -287,7 +287,25 @@ Tested: image build, non-root user, healthcheck command semantics (200 passes, 5
 
 ### 7.6 Deploy on an Ubuntu server
 
-Deploy from the private image `phuc16/discord-mcp` with `docker-compose.server.yml` (no build on the server). It runs the image as uid 1000 with a read-only root filesystem (`/tmp` is a tmpfs; the SQLite database, its WAL files and the lock file live in `./data`, the only writable path), all capabilities dropped, `no-new-privileges`, memory and pids limits, rotated json-file logs, and the port published on `127.0.0.1:8787` only.
+Deploy from the private image `phuc16/discord-mcp` with `docker-compose.server.yml` (no build on the server; the file name is arbitrary, so renaming it to `docker-compose.prod.yml` is fine as long as you pass it with `-f`). It runs the image as uid 1000 with a read-only root filesystem (`/tmp` is a tmpfs; the SQLite database, its WAL files and the lock file live in `./data`, the only writable path), all capabilities dropped, `no-new-privileges`, memory and pids limits, rotated json-file logs, and the port published on `127.0.0.1:8787` only.
+
+**Step 1: TLS in front (required).** HTTP mode refuses to start unless `PUBLIC_BASE_URL` is `https://` (plain `http://` is accepted only for localhost). So first point DNS at the server, then install Caddy, which gets the certificate itself:
+
+```bash
+sudo apt install caddy
+```
+
+`/etc/caddy/Caddyfile`:
+
+```
+your.domain {
+    reverse_proxy 127.0.0.1:8787
+}
+```
+
+Then `sudo systemctl reload caddy`. Open the firewall for 80 (certificate issuance) and 443, never 8787: `sudo ufw allow 22/tcp && sudo ufw allow 80/tcp && sudo ufw allow 443/tcp && sudo ufw enable`. In `data/config.yaml` set `http.trust_proxy: 1` (one proxy) so client IPs come from `X-Forwarded-For`, and set `PUBLIC_BASE_URL=https://your.domain` in `.env`. Register `https://your.domain/callback` as the redirect URI in the Discord developer portal; it must equal `PUBLIC_BASE_URL/callback` exactly (`discord-mcp --check --http` prints it). With nginx instead of Caddy, use `proxy_pass http://127.0.0.1:8787;`, `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` and `proxy_buffering off;` for the event stream; both proxies pass `Cookie` and `Set-Cookie` through untouched.
+
+**Step 2: the app.**
 
 1. Install Docker Engine and the compose plugin (see docs.docker.com/engine/install/ubuntu), then log in to the private repository: `docker login -u phuc16`.
 2. Create the working directory with a data folder owned by the container user:
@@ -297,19 +315,9 @@ Deploy from the private image `phuc16/discord-mcp` with `docker-compose.server.y
    sudo chown 1000:1000 data
    ```
 
-3. Copy `docker-compose.server.yml`, `config.docker.example.yaml` and `.env.example` from the repository to that directory. Then `cp config.docker.example.yaml data/config.yaml` and edit the guild id, and `cp .env.example .env` and fill in `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `PUBLIC_BASE_URL=https://your.domain`. In `data/config.yaml` set `http.trust_proxy: 1` (one reverse proxy). Keep `.env` private: `chmod 600 .env`.
+3. Copy `docker-compose.server.yml`, `config.docker.example.yaml` and `.env.example` from the repository to that directory. Then `cp config.docker.example.yaml data/config.yaml` and edit the guild id (and `trust_proxy: 1`), and `cp .env.example .env` and fill in `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `PUBLIC_BASE_URL=https://your.domain`. Keep `.env` private: `chmod 600 .env`.
 4. Start it: `docker compose -f docker-compose.server.yml pull && docker compose -f docker-compose.server.yml up -d`.
 5. Check it: `docker compose -f docker-compose.server.yml ps` shows `healthy`, `docker compose -f docker-compose.server.yml logs -f discord-mcp` shows the logs, and `curl -s http://127.0.0.1:8787/healthz` returns `{"status":"ok",...}`.
-
-**TLS reverse proxy (Caddy).** The container is only reachable from the host, so put TLS in front of it. With Caddy installed (`sudo apt install caddy`), `/etc/caddy/Caddyfile`:
-
-```
-your.domain {
-    reverse_proxy 127.0.0.1:8787
-}
-```
-
-Then `sudo systemctl reload caddy`. Caddy obtains the certificate itself and forwards `X-Forwarded-For`, `Cookie` and `Set-Cookie` untouched. With nginx, use `proxy_pass http://127.0.0.1:8787;` plus `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` and `proxy_buffering off;` for the event stream. Register `https://your.domain/callback` as the redirect URI in the Discord developer portal (it must equal `PUBLIC_BASE_URL/callback` exactly). Firewall: `sudo ufw allow 22/tcp && sudo ufw allow 443/tcp && sudo ufw allow 80/tcp && sudo ufw enable` (80 is needed by Caddy for certificate issuance); do not open 8787.
 
 **Update and rollback.** The compose file pulls `latest` by default. To update: `docker compose -f docker-compose.server.yml pull && docker compose -f docker-compose.server.yml up -d`. To pin or roll back, set `DISCORD_MCP_TAG` (for example in `.env` or the shell) to a version tag such as `0.1.0` or `sha-<commit>` and run the same two commands. The database migrates forward on start; a build older than the database refuses to start, so take a backup before upgrading.
 
@@ -485,6 +493,7 @@ Tier: **R** read, **W** write, **D** destructive (dry-run preview then `confirm_
 | `redirect_uri` mismatch at Discord | `<PUBLIC_BASE_URL>/callback` must be registered exactly in the portal. |
 | `cannot read config file /data/config.yaml: it does not exist` (container exits with code 78) | `./data` is mounted but empty. Run `mkdir -p data && cp config.docker.example.yaml data/config.yaml`, edit the guild id, `chown 1000:1000 data` on Linux, and restart. "not readable" means the file is not readable by uid 1000. Or set `DISCORD_MCP_GUILD_ID` to generate a minimal config. |
 | `database directory ... is not writable` (exit 78) | The data directory is not writable by the container user: `sudo chown 1000:1000 data`. |
+| `PUBLIC_BASE_URL uses scheme "http" but must be https ...` (older builds: `Issuer URL must be HTTPS`) | `PUBLIC_BASE_URL` is `http://` on a non-local host. Put a TLS reverse proxy in front (section 7.6, step 1) and set `PUBLIC_BASE_URL=https://your.domain`. The value must be the bare origin: no path, query or trailing slash. |
 | `database ... is already in use` at startup | Another discord-mcp process is using that database. Stop it, or use a different `database_path`. |
 | No events arrive | Check `/healthz` for `gateway: ready`, that the guild is in `config.yaml`, and the intents. A `gap` event marks a reconnect. |
 

@@ -2,6 +2,7 @@ import { createDiscordOAuthPort, createDiscordPort, createGateway } from '../dis
 import { createLogger } from '../cli/logger.js'
 import { loadConfig } from '../cli/config-loader.js'
 import { ConfigError, checkWritableDir } from '../cli/errors.js'
+import { publicUrlProblem } from '../cli/public-url.js'
 import { openStore } from '../store/index.js'
 import { startHttp } from './http.js'
 import type { HttpHandle } from './http.js'
@@ -73,7 +74,10 @@ export const startServer = async (opts: { configPath: string; http: boolean }): 
   const botToken = requireEnv(env, 'DISCORD_BOT_TOKEN')
   const clientId = opts.http ? requireEnv(env, 'DISCORD_CLIENT_ID') : ''
   const clientSecret = opts.http ? requireEnv(env, 'DISCORD_CLIENT_SECRET') : ''
-  if (opts.http) requireEnv(env, 'PUBLIC_BASE_URL')
+  if (opts.http) {
+    const problem = publicUrlProblem(requireEnv(env, 'PUBLIC_BASE_URL'))
+    if (problem) throw new ConfigError(problem)
+  }
   checkWritableDir(config.database_path)
   const store = openStore(config.database_path)
   const input: RuntimeInput = {

@@ -1,6 +1,7 @@
 import type { DiscordPort } from '../contracts/index.js'
 import { openStore } from '../store/index.js'
 import { loadConfig } from './config-loader.js'
+import { publicUrlProblem, redirectUriFor } from './public-url.js'
 
 export interface CheckOptions {
   configPath: string
@@ -13,6 +14,7 @@ export interface CheckOptions {
 export interface CheckResult {
   ok: boolean
   problems: string[]
+  redirectUri?: string
 }
 
 const STDIO_ENV = ['DISCORD_BOT_TOKEN']
@@ -30,6 +32,9 @@ export const runCheck = async (opts: CheckOptions): Promise<CheckResult> => {
   for (const name of opts.http ? [...STDIO_ENV, ...HTTP_ENV] : STDIO_ENV) {
     if (!env[name]) problems.push(`missing env var ${name}`)
   }
+  const baseUrl = env.PUBLIC_BASE_URL
+  const urlProblem = opts.http && baseUrl ? publicUrlProblem(baseUrl) : null
+  if (urlProblem) problems.push(urlProblem)
   try {
     openStore(':memory:').close()
   } catch (err) {
@@ -43,5 +48,6 @@ export const runCheck = async (opts: CheckOptions): Promise<CheckResult> => {
       problems.push(`discord check failed: ${(err as Error).message}`)
     }
   }
-  return { ok: problems.length === 0, problems }
+  const redirectUri = opts.http && baseUrl && !urlProblem ? redirectUriFor(baseUrl) : undefined
+  return { ok: problems.length === 0, problems, ...(redirectUri ? { redirectUri } : {}) }
 }

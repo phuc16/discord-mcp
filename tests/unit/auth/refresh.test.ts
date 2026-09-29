@@ -17,7 +17,7 @@ describe('permission refresher', () => {
   let store: Store
   let perms: Record<string, string | Error>
   let cb: ((e: NormalizedEvent) => void) | null
-  let onDemoted: ReturnType<typeof vi.fn<(userId: string, reason: string) => void>>
+  let onDemoted: ReturnType<typeof vi.fn<(userId: string, guildId: string, reason: string) => void>>
   let fetchMemberPermissions: ReturnType<typeof vi.fn>
   let r: ReturnType<typeof createPermissionRefresher>
   const clock = 1_000_000
@@ -33,7 +33,7 @@ describe('permission refresher', () => {
     store = openStore(':memory:')
     perms = {}
     cb = null
-    onDemoted = vi.fn<(userId: string, reason: string) => void>()
+    onDemoted = vi.fn<(userId: string, guildId: string, reason: string) => void>()
     fetchMemberPermissions = vi.fn(async (g: string, u: string) => {
       const v = perms[`${g}:${u}`]
       if (v instanceof Error) throw v
@@ -72,7 +72,7 @@ describe('permission refresher', () => {
     await r.refreshUser('u1')
     expect(Object.keys(guildsOf())).toEqual([G2])
     expect(onDemoted).toHaveBeenCalledTimes(1)
-    expect(onDemoted).toHaveBeenCalledWith('u1', expect.stringContaining(G1))
+    expect(onDemoted).toHaveBeenCalledWith('u1', G1, expect.stringContaining(G1))
   })
 
   it('drops a guild the user left', async () => {
@@ -80,7 +80,7 @@ describe('permission refresher', () => {
     perms[`${G2}:u1`] = bits(PERM.MANAGE_GUILD)
     await r.refreshUser('u1')
     expect(Object.keys(guildsOf())).toEqual([G2])
-    expect(onDemoted).toHaveBeenCalledWith('u1', expect.stringContaining(G1))
+    expect(onDemoted).toHaveBeenCalledWith('u1', G1, expect.stringContaining(G1))
   })
 
   it('keeps stale permissions on transient errors', async () => {
@@ -109,25 +109,72 @@ describe('permission refresher', () => {
     expect(Object.keys(guildsOf())).toEqual([G2])
   })
 
-  it.each(['member_join', 'member_remove', 'member_ban', 'member_unban', 'role_create', 'role_update', 'role_delete'] as const)(
-    '%s triggers a refresh',
+  it.each(['role_create', 'role_update', 'role_delete'] as const)('%s triggers a guild-wide refresh', async (type) => {
+    session()
+    perms[`${G1}:u1`] = bits(PERM.ADMINISTRATOR)
+    perms[`${G2}:u1`] = bits(PERM.ADMINISTRATOR)
+    r.start()
+    cb!(ev(type, G1))
+    await r.idle()
+    expect(fetchMemberPermissions).toHaveBeenCalled()
+  })
+
+  it.each(['member_update', 'member_join', 'member_remove', 'member_ban', 'member_unban'] as const)(
+    '%s refreshes only the affected user',
     async (type) => {
       session()
-      perms[`${G1}:u1`] = bits(PERM.ADMINISTRATOR)
-      perms[`${G2}:u1`] = bits(PERM.ADMINISTRATOR)
+      session({ familyId: 'fam9', accessHash: 'a9', refreshHash: 'r9', userId: 'u9', userName: 'bob' })
+      perms[`${G1}:u1`] = bits(PERM.MANAGE_MESSAGES)
+      perms[`${G2}:u1`] = bits(PERM.MANAGE_GUILD)
       r.start()
-      cb!(ev(type, G1))
+      cb!({ ...ev(type, G1), data: { user_id: 'u1' } })
       await r.idle()
-      expect(fetchMemberPermissions).toHaveBeenCalled()
+      expect(fetchMemberPermissions.mock.calls.every((c) => c[1] === 'u1')).toBe(true)
+      expect(Object.keys(guildsOf())).toEqual([G2])
     },
   )
+
+  it('member events for users without a session or without user_id do nothing', async () => {
+    session()
+    r.start()
+    cb!({ ...ev('member_update', G1), data: { user_id: 'stranger' } })
+    cb!(ev('member_ban', G1))
+    await r.idle()
+    expect(fetchMemberPermissions).not.toHaveBeenCalled()
+  })
+
+  it('fails closed after consecutive fetch failures', async () => {
+    session()
+    perms[`${G1}:u1`] = new McpToolError('internal', 'boom')
+    perms[`${G2}:u1`] = bits(PERM.MANAGE_GUILD)
+    await r.refreshUser('u1')
+    await r.refreshUser('u1')
+    expect(Object.keys(guildsOf()).sort()).toEqual([G1, G2])
+    await r.refreshUser('u1')
+    expect(Object.keys(guildsOf())).toEqual([G2])
+    expect(onDemoted).toHaveBeenCalledWith('u1', G1, expect.any(String))
+  })
+
+  it('a successful fetch resets the failure count', async () => {
+    session()
+    perms[`${G2}:u1`] = bits(PERM.MANAGE_GUILD)
+    perms[`${G1}:u1`] = new McpToolError('internal', 'boom')
+    await r.refreshUser('u1')
+    await r.refreshUser('u1')
+    perms[`${G1}:u1`] = bits(PERM.ADMINISTRATOR)
+    await r.refreshUser('u1')
+    perms[`${G1}:u1`] = new McpToolError('internal', 'boom')
+    await r.refreshUser('u1')
+    await r.refreshUser('u1')
+    expect(Object.keys(guildsOf()).sort()).toEqual([G1, G2])
+  })
 
   it('unrelated events and unrelated guilds do nothing', async () => {
     session()
     r.start()
     cb!(ev('message_create', G1))
     cb!(ev('channel_update', G1))
-    cb!(ev('member_join', G3))
+    cb!({ ...ev('member_join', G3), data: { user_id: 'u1' } })
     await r.idle()
     expect(fetchMemberPermissions).not.toHaveBeenCalled()
   })

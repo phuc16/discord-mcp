@@ -287,6 +287,31 @@ afterAll(async () => {
   store.close()
 })
 
+describe('cors', () => {
+  const EVIL = 'http://evil.example'
+  const REGISTERED = new URL(REDIRECT).origin
+
+  it.each([
+    ['POST', '/token'],
+    ['POST', '/register'],
+    ['POST', '/revoke'],
+  ] as const)('%s %s does not allow an unregistered origin', async (method, path) => {
+    const r = await fetch(`${base}${path}`, { method, headers: { origin: EVIL }, redirect: 'manual' })
+    const acao = r.headers.get('access-control-allow-origin')
+    expect(acao).not.toBe('*')
+    expect(acao).not.toBe(EVIL)
+  })
+
+  it('a registered redirect origin is allowed on /token', async () => {
+    await defaultClient()
+    const r = await fetch(`${base}/token`, {
+      method: 'OPTIONS',
+      headers: { origin: REGISTERED, 'access-control-request-method': 'POST' },
+    })
+    expect(r.headers.get('access-control-allow-origin')).toBe(REGISTERED)
+  })
+})
+
 describe('discovery', () => {
   it('serves protected resource and authorization server metadata', async () => {
     const pr = await req('/.well-known/oauth-protected-resource')

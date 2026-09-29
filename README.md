@@ -285,6 +285,40 @@ Only one container may use a given `/data` volume: a second process on the same 
 
 Tested: image build, non-root user, healthcheck command semantics (200 passes, 503 fails) and SIGTERM handling. Not tested against a real Discord token.
 
+### 7.6 Deploy on an Ubuntu server
+
+Deploy from the private image `phuc16/discord-mcp` with `docker-compose.server.yml` (no build on the server). It runs the image as uid 1000 with a read-only root filesystem (`/tmp` is a tmpfs; the SQLite database, its WAL files and the lock file live in `./data`, the only writable path), all capabilities dropped, `no-new-privileges`, memory and pids limits, rotated json-file logs, and the port published on `127.0.0.1:8787` only.
+
+1. Install Docker Engine and the compose plugin (see docs.docker.com/engine/install/ubuntu), then log in to the private repository: `docker login -u phuc16`.
+2. Create the working directory with a data folder owned by the container user:
+
+   ```bash
+   mkdir -p ~/discord-mcp/data && cd ~/discord-mcp
+   sudo chown 1000:1000 data
+   ```
+
+3. Copy `docker-compose.server.yml`, `config.docker.example.yaml` and `.env.example` from the repository to that directory. Then `cp config.docker.example.yaml data/config.yaml` and edit the guild id, and `cp .env.example .env` and fill in `DISCORD_BOT_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` and `PUBLIC_BASE_URL=https://your.domain`. In `data/config.yaml` set `http.trust_proxy: 1` (one reverse proxy). Keep `.env` private: `chmod 600 .env`.
+4. Start it: `docker compose -f docker-compose.server.yml pull && docker compose -f docker-compose.server.yml up -d`.
+5. Check it: `docker compose -f docker-compose.server.yml ps` shows `healthy`, `docker compose -f docker-compose.server.yml logs -f discord-mcp` shows the logs, and `curl -s http://127.0.0.1:8787/healthz` returns `{"status":"ok",...}`.
+
+**TLS reverse proxy (Caddy).** The container is only reachable from the host, so put TLS in front of it. With Caddy installed (`sudo apt install caddy`), `/etc/caddy/Caddyfile`:
+
+```
+your.domain {
+    reverse_proxy 127.0.0.1:8787
+}
+```
+
+Then `sudo systemctl reload caddy`. Caddy obtains the certificate itself and forwards `X-Forwarded-For`, `Cookie` and `Set-Cookie` untouched. With nginx, use `proxy_pass http://127.0.0.1:8787;` plus `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` and `proxy_buffering off;` for the event stream. Register `https://your.domain/callback` as the redirect URI in the Discord developer portal (it must equal `PUBLIC_BASE_URL/callback` exactly). Firewall: `sudo ufw allow 22/tcp && sudo ufw allow 443/tcp && sudo ufw allow 80/tcp && sudo ufw enable` (80 is needed by Caddy for certificate issuance); do not open 8787.
+
+**Update and rollback.** The compose file pulls `latest` by default. To update: `docker compose -f docker-compose.server.yml pull && docker compose -f docker-compose.server.yml up -d`. To pin or roll back, set `DISCORD_MCP_TAG` (for example in `.env` or the shell) to a version tag such as `0.1.0` or `sha-<commit>` and run the same two commands. The database migrates forward on start; a build older than the database refuses to start, so take a backup before upgrading.
+
+**Backup.** Everything stateful is in `./data` (`config.yaml` and the SQLite database). For a consistent copy stop the service or use SQLite's online backup: `docker compose -f docker-compose.server.yml stop && tar czf discord-mcp-data-$(date +%F).tar.gz data && docker compose -f docker-compose.server.yml start`.
+
+**Alternative.** If you already run the `all-in-one` container under supervisord, run it as a supervisord program (7.4) and restart it with `docker exec all-in-one supervisorctl restart <service-name>`.
+
+Publishing (maintainers): `scripts/publish-image.sh` builds `linux/amd64` and `linux/arm64`, tags `<version>`, `latest` and `sha-<commit>`, and pushes to `phuc16/discord-mcp`; `--dry-run` builds locally only. It requires a clean git tree and a Docker Hub login. The image contains no sourcemaps.
+
 ## 8. Using the tools
 
 Ask in plain language; the client picks the tools. Examples by group:

@@ -9,10 +9,18 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY tsconfig.json tsup.config.ts ./
 COPY src ./src
-RUN pnpm build
+RUN pnpm build \
+  && find dist -name '*.map' -delete
 RUN pnpm prune --prod
 
 FROM node:22-slim
+ARG VERSION=dev
+ARG GIT_SHA=unknown
+LABEL org.opencontainers.image.source="https://github.com/phuc16/discord-mcp" \
+  org.opencontainers.image.title="discord-mcp" \
+  org.opencontainers.image.description="MCP server for managing Discord guilds with tiered safety, audit and automation rules" \
+  org.opencontainers.image.version="${VERSION}" \
+  org.opencontainers.image.revision="${GIT_SHA}"
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build --chown=node:node /app/node_modules ./node_modules

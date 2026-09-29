@@ -99,6 +99,15 @@ describe('buildRuntime', () => {
   })
 })
 
+describe('launch failure', () => {
+  it('closes the store and releases its lock when the gateway fails to start', async () => {
+    const i = input()
+    vi.spyOn(i.gateway, 'start').mockRejectedValue(new Error('invalid token'))
+    await expect(launch(i, { http: true })).rejects.toThrow(/invalid token/)
+    expect(() => i.store.audit.query({ limit: 1 })).toThrow()
+  })
+})
+
 describe('launch (http)', () => {
   it('serves healthz, protects /mcp, accepts a service token and shuts down cleanly', async () => {
     const i = input()

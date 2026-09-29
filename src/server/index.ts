@@ -26,10 +26,10 @@ const dbHealth = (store: RuntimeInput['store']): string => {
 
 export const launch = async (input: RuntimeInput, opts: { http: boolean; onExit?: () => void }): Promise<{ close(): Promise<void>; port?: number }> => {
   const runtime = buildRuntime(input, opts)
-  await runtime.start()
   let httpHandle: HttpHandle | undefined
   let stdio: { close(): Promise<void> } | undefined
   try {
+    await runtime.start()
     if (opts.http && runtime.http) {
       httpHandle = await startHttp({
         deps: runtime.deps,
@@ -45,7 +45,7 @@ export const launch = async (input: RuntimeInput, opts: { http: boolean; onExit?
       stdio = await startStdio(runtime.deps, { onEnd: opts.onExit })
     }
   } catch (err) {
-    await runtime.stop()
+    await runtime.stop().catch(() => undefined)
     input.store.close()
     throw err
   }

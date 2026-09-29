@@ -188,3 +188,66 @@ describe('docker', () => {
     for (const s of ['78', 'EX_CONFIG', 'chown 1000:1000', 'DISCORD_MCP_GUILD_ID', 'mkdir -p data && cp config.docker.example.yaml data/config.yaml', 'it does not exist']) expect(readme).toContain(s)
   })
 })
+
+describe('server deployment', () => {
+  interface Service {
+    image: string
+    build?: unknown
+    pull_policy: string
+    env_file: string
+    volumes: string[]
+    restart: string
+    read_only: boolean
+    tmpfs: string[]
+    cap_drop: string[]
+    security_opt: string[]
+    ports: string[]
+    mem_limit: string
+    pids_limit: number
+    logging: { driver: string; options: Record<string, string> }
+    user?: string
+  }
+  const load = async (): Promise<Service> => {
+    const { parse } = await import('yaml')
+    return (parse(read('docker-compose.server.yml')) as { services: Record<string, Service> }).services['discord-mcp']!
+  }
+  it('pulls the private image and never builds', async () => {
+    const svc = await load()
+    expect(svc.image).toBe('phuc16/discord-mcp:${DISCORD_MCP_TAG:-latest}')
+    expect(svc.build).toBeUndefined()
+    expect(svc.pull_policy).toBe('always')
+    expect(svc.restart).toBe('unless-stopped')
+    expect(svc.user).toBeUndefined()
+  })
+  it('is hardened', async () => {
+    const svc = await load()
+    expect(svc.read_only).toBe(true)
+    expect(svc.tmpfs).toContain('/tmp')
+    expect(svc.cap_drop).toEqual(['ALL'])
+    expect(svc.security_opt).toContain('no-new-privileges:true')
+    expect(svc.mem_limit).toBeTruthy()
+    expect(svc.pids_limit).toBeGreaterThan(0)
+    expect(svc.logging).toEqual({ driver: 'json-file', options: { 'max-size': '10m', 'max-file': '5' } })
+    expect(svc.volumes).toEqual(['./data:/data'])
+    expect(svc.env_file).toBe('.env')
+  })
+  it('binds loopback only', async () => {
+    expect((await load()).ports).toEqual(['127.0.0.1:8787:8787'])
+  })
+  it('Dockerfile strips sourcemaps, labels the image and keeps a non-root user', () => {
+    const df = read('Dockerfile')
+    expect(df).toContain("find dist -name '*.map' -delete")
+    for (const l of ['org.opencontainers.image.source="https://github.com/phuc16/discord-mcp"', 'org.opencontainers.image.version', 'org.opencontainers.image.revision', 'ARG VERSION', 'ARG GIT_SHA']) expect(df).toContain(l)
+    expect(df).toMatch(/USER node/)
+  })
+  it('publish script is strict, multi-arch and supports dry runs', () => {
+    const sh = read('scripts/publish-image.sh')
+    expect(sh).toContain('set -euo pipefail')
+    for (const s of ['linux/amd64,linux/arm64', '--dry-run', '--load', '--push', 'phuc16/discord-mcp', 'sha-', 'not logged in', 'not clean']) expect(sh).toContain(s)
+  })
+  it('README and getting-started document the Ubuntu deployment', () => {
+    const readme = read('README.md')
+    for (const s of ['Deploy on an Ubuntu server', 'docker-compose.server.yml', 'docker login', 'DISCORD_MCP_TAG', 'reverse_proxy 127.0.0.1:8787', 'ufw', 'https://your.domain/callback', 'supervisorctl restart <service-name>', 'trust_proxy: 1']) expect(readme).toContain(s)
+    expect(read('docs/getting-started.md')).toContain('Deploy on an Ubuntu server')
+  })
+})

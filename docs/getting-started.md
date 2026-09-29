@@ -84,3 +84,7 @@ HTTP mode keeps one MCP session per client. Subscribe to `discord://guild/{guild
 ## 10. Smoke test
 
 Follow the [smoke checklist](smoke-checklist.md) against a throwaway guild before pointing the server at a real one.
+
+## 11. Deploy on an Ubuntu server
+
+To run it on a server from the private image `phuc16/discord-mcp`: install Docker, run `docker login`, create `./data` and `chown 1000:1000 data`, copy `config.docker.example.yaml` to `data/config.yaml` (edit the guild id, set `http.trust_proxy: 1`), create `.env` from `.env.example` (with `PUBLIC_BASE_URL=https://your.domain`), then `docker compose -f docker-compose.server.yml pull && docker compose -f docker-compose.server.yml up -d`. Put a TLS reverse proxy (Caddy or nginx) in front of `127.0.0.1:8787`, register `https://your.domain/callback` as the Discord redirect URI and allow only port 443 (and 80 for Caddy) in `ufw`. Pin or roll back with `DISCORD_MCP_TAG`. Full steps, the Caddyfile, backup and update instructions are in the README, section 7.6.

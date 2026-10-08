@@ -813,7 +813,7 @@ export const buildInviteUrl = (clientId: string, preset: string | bigint): strin
 ```
 - Consumes: `ConfigSchema`, `Logger` from contracts.
 
-**Acceptance:** invalid config gives a message listing each failing path; logger never emits tokens (redaction test); `invite-url` unknown preset exits non-zero; `--check` validates config file, required env vars (`DISCORD_BOT_TOKEN`, and for `--http`: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL`, `TOKEN_SIGNING_KEY`), and reports each missing name.
+**Acceptance:** invalid config gives a message listing each failing path; logger never emits tokens (redaction test); `invite-url` unknown preset exits non-zero; `--check` validates config file, required env vars (`DISCORD_BOT_TOKEN`, and for `--http`: `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `PUBLIC_BASE_URL`), and reports each missing name.
 
 - [ ] **Step 1: Failing tests**
 

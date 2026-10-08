@@ -1,0 +1,25 @@
+guilds:
+  "123456789012345678":
+    max_tier: destructive
+tools:
+  deny: []
+rate_limits:
+  bulk_per_minute: 5
+events:
+  retention_hours: 72
+  max_buffer: 50000
+http:
+  host: 127.0.0.1
+  port: 8787
+  trust_proxy: false
+  allowed_redirect_uris: []
+  max_clients: 1000
+  max_sessions_per_principal: 10
+  service_tokens: []
+safety:
+  allow_token_confirm: false
+rules:
+  max_per_guild: 50
+  min_cooldown_sec: 1
+message_content_intent: false
+database_path: ./discord-mcp.db

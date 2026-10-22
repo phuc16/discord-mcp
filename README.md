@@ -1,6 +1,8 @@
 # discord-mcp
 
-An MCP server that lets Claude Code, Claude Desktop and other MCP clients manage Discord guilds. It exposes 102 tools (channels, threads, roles, members, moderation, messages, webhooks, scheduled events, invites, emojis, audit log), live gateway events, and an automation rules engine, all behind one safety pipeline.
+**English** | [Tiếng Việt](README.vi.md)
+
+An MCP server that lets Claude Code, Claude Desktop and other MCP clients manage Discord guilds. It exposes 104 tools (channels, threads, roles, members, moderation, messages, webhooks, scheduled events, invites, emojis, audit log), live gateway events, and an automation rules engine, all behind one safety pipeline.
 
 This README is the full tutorial. For the short version see [docs/getting-started.md](docs/getting-started.md); for manual verification see [docs/smoke-checklist.md](docs/smoke-checklist.md).
 

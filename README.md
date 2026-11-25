@@ -207,7 +207,7 @@ No license file has been added to this repository yet, so all rights are reserve
 
 ## Contact
 
-Phuc Truong Hoang - [@phuc16](https://github.com/phuc16)
+Phuc Truong Hoang - [@phuc16](https://github.com/phuc16) - [LinkedIn](https://www.linkedin.com/in/phuc-truong-hoang-33559a232)
 
 Project Link: [https://github.com/phuc16/discord-mcp](https://github.com/phuc16/discord-mcp)
 
@@ -218,6 +218,9 @@ Project Link: [https://github.com/phuc16/discord-mcp](https://github.com/phuc16/
 * [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
 * [Model Context Protocol](https://modelcontextprotocol.io)
 * [discord.js](https://discord.js.org)
+* [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
+* [Vitest](https://vitest.dev)
+* [Discord Developer Docs](https://discord.com/developers/docs)
 * [Shields.io](https://shields.io)
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
